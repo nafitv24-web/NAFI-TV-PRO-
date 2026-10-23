@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "MarqueeNews": {
+      "title": "Marquee News",
+      "description": "Breaking news ticker and announcement banner",
+      "type": "object",
+      "properties": {
+        "marquee_ticker": { "type": "string", "description": "Ticker message text" },
+        "text": { "type": "string", "description": "Display text" },
+        "updated_at": { "type": "integer", "description": "Timestamp in milliseconds" }
+      },
+      "required": ["marquee_ticker"]
+    },
+    "SportsEvent": {
+      "title": "Sports Event",
+      "description": "Live sports fixture and streaming link",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Event unique identifier" },
+        "title": { "type": "string", "description": "Match or event title" },
+        "stream_url": { "type": "string", "description": "Stream URL or link" },
+        "category": { "type": "string", "description": "Sport category" },
+        "status": { "type": "string", "description": "Live, upcoming, or finished" },
+        "updated_at": { "type": "integer", "description": "Last update timestamp" }
+      },
+      "required": ["id", "title"]
+    },
+    "Playlist": {
+      "title": "Playlist",
+      "description": "User or admin M3U / Xtream playlist",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Playlist ID" },
+        "name": { "type": "string", "description": "Playlist Name" },
+        "url": { "type": "string", "description": "Playlist URL" },
+        "type": { "type": "string", "description": "Playlist type" },
+        "created_at": { "type": "integer", "description": "Creation timestamp" }
+      },
+      "required": ["id", "name", "url"]
+    },
+    "AppNotification": {
+      "title": "App Notification",
+      "description": "Push notification and announcement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "title": { "type": "string", "description": "Title" },
+        "message": { "type": "string", "description": "Body message" },
+        "timestamp": { "type": "integer", "description": "Timestamp" }
+      },
+      "required": ["id", "title", "message"]
+    }
+  },
+  "firestore": {
+    "/settings/marquee_news": {
+      "schema": { "$ref": "#/entities/MarqueeNews" },
+      "description": "Breaking news ticker and announcements"
+    },
+    "/app_config/marquee_ticker": {
+      "schema": { "$ref": "#/entities/MarqueeNews" },
+      "description": "Alternative ticker configuration location"
+    },
+    "/sports/{sportId}": {
+      "schema": { "$ref": "#/entities/SportsEvent" },
+      "description": "Live sports channels and match fixtures"
+    },
+    "/playlists/{playlistId}": {
+      "schema": { "$ref": "#/entities/Playlist" },
+      "description": "Custom streaming playlists"
+    },
+    "/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "Broadcast notifications for app users"
+    }
+  }
+}
