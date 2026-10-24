@@ -4149,7 +4149,11 @@ fun LiveEventMatchCard(
                         }
 
                         servers.forEachIndexed { idx, srv ->
-                            val cleanName = srv.name.ifBlank { "সার্ভার ${idx + 1}" }
+                            val cleanName = srv.name
+                                .replace("Tapmad Live (BD IP / Akamai)", "VIP NAFI LIVE")
+                                .replace("Tapmad Live (Direct HD)", "VIP NAFI LIVE")
+                                .replace("Tapmad Live", "VIP NAFI LIVE")
+                                .ifBlank { "সার্ভার ${idx + 1}" }
                             Surface(
                                 shape = RoundedCornerShape(5.dp),
                                 color = Color(0xFF1E293B),
@@ -4294,7 +4298,11 @@ fun LiveEventMatchCard(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     servers.forEachIndexed { index, srv ->
-                        val cleanName = srv.name.ifBlank { "সার্ভার ${index + 1}" }
+                        val cleanName = srv.name
+                            .replace("Tapmad Live (BD IP / Akamai)", "VIP NAFI LIVE")
+                            .replace("Tapmad Live (Direct HD)", "VIP NAFI LIVE")
+                            .replace("Tapmad Live", "VIP NAFI LIVE")
+                            .ifBlank { "সার্ভার ${index + 1}" }
                         val isLinkValid = srv.url.isNotBlank() && !srv.url.equals("null", ignoreCase = true)
                         Surface(
                             shape = RoundedCornerShape(10.dp),

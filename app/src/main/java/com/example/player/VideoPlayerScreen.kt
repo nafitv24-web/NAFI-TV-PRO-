@@ -4049,7 +4049,10 @@ fun VideoPlayerScreen(
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = server.name,
+                                                text = server.name
+                                                    .replace("Tapmad Live (BD IP / Akamai)", "VIP NAFI LIVE")
+                                                    .replace("Tapmad Live (Direct HD)", "VIP NAFI LIVE")
+                                                    .replace("Tapmad Live", "VIP NAFI LIVE"),
                                                 color = if (isSelected) Color.Black else Color.White,
                                                 fontSize = 12.sp,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
@@ -5299,7 +5302,10 @@ fun TvPlayerServerChip(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = server.name,
+                text = server.name
+                    .replace("Tapmad Live (BD IP / Akamai)", "VIP NAFI LIVE")
+                    .replace("Tapmad Live (Direct HD)", "VIP NAFI LIVE")
+                    .replace("Tapmad Live", "VIP NAFI LIVE"),
                 color = if (isFocused || isSelected) Color.Black else Color.White,
                 fontSize = 13.sp,
                 fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium

@@ -1662,13 +1662,13 @@ class MediaRepository(private val context: Context) {
                 val finalServers = if (resolvedServers.isNotEmpty()) {
                     val sList = mutableListOf<StreamServer>()
                     if (streamUrl.isNotBlank() && resolvedServers.none { it.url.trim().equals(streamUrl.trim(), ignoreCase = true) }) {
-                        val sName = if (isAkamaiOrTapmad) "Tapmad Live (Direct HD)" else "সার্ভার ১ (Main)"
+                        val sName = if (isAkamaiOrTapmad) "VIP NAFI LIVE" else "সার্ভার ১ (Main)"
                         sList.add(StreamServer(sName, streamUrl))
                     }
                     sList.addAll(resolvedServers)
                     sList.distinctBy { it.url.trim().lowercase() }
                 } else {
-                    listOf(StreamServer(if (isAkamaiOrTapmad) "Tapmad Live (Direct HD)" else "সার্ভার ১ (Main)", streamUrl))
+                    listOf(StreamServer(if (isAkamaiOrTapmad) "VIP NAFI LIVE" else "সার্ভার ১ (Main)", streamUrl))
                 }
 
                 val finalStreamUrl = if (streamUrl.isNotBlank()) {
@@ -4734,7 +4734,7 @@ class MediaRepository(private val context: Context) {
                 cleanId.contains("18900") || cleanUrl.contains("28593jkil")
         if (isAfgBan) {
             val tapmadUrl = if (originalStreamUrl.isNotBlank()) originalStreamUrl else "https://saseries.akamaized.net/hls/live/2110097/28593jkiL-tapmad/master.m3u8"
-            list.add(StreamServer("Tapmad Live (Direct HD)", tapmadUrl))
+            list.add(StreamServer("VIP NAFI LIVE", tapmadUrl))
             list.add(StreamServer("T SPORTS HD (Live BD)", "http://livetv.akr4m.com:8080/bdtv/restrem/02.m3u8"))
             list.add(StreamServer("SKY CRICKET FHD (Live)", "https://bl.rutube.ru/livestream/7c13a51576b9ff2601f08f5d57dd5169/index.m3u8?s=uiXES2ePt7xTpQnbJxn7Dg&e=2074684474&scheme=https"))
             list.add(StreamServer("WILLOW FHD (ClearKey DASH)", "https://otte.live.fly.ww.aiv-cdn.net/iad-nitro/live/clients/dash/enc/v8s736w0hw/out/v1/713012dd281246dc827872d3920a8443/cenc.mpd"))
@@ -4746,7 +4746,7 @@ class MediaRepository(private val context: Context) {
                 cleanId.contains("17700") || cleanUrl.contains("fifa-3827e1")
         if (isSaAus) {
             val tapmadUrl = if (originalStreamUrl.isNotBlank()) originalStreamUrl else "https://saseries.akamaized.net/hls/live/2110097/FiFa-3827e1/master.m3u8"
-            list.add(StreamServer("Tapmad Live (Direct HD)", tapmadUrl))
+            list.add(StreamServer("VIP NAFI LIVE", tapmadUrl))
             list.add(StreamServer("SKY CRICKET FHD (Live)", "https://bl.rutube.ru/livestream/7c13a51576b9ff2601f08f5d57dd5169/index.m3u8?s=uiXES2ePt7xTpQnbJxn7Dg&e=2074684474&scheme=https"))
             list.add(StreamServer("WILLOW FHD (ClearKey DASH)", "https://otte.live.fly.ww.aiv-cdn.net/iad-nitro/live/clients/dash/enc/1dwfmiwgbk/out/v1/713012dd281246dc827872d3920a8443/cenc.mpd|drmScheme=clearkey&drmLicense=61b5fe1a7d9d83929d15da6db1c5f427:6e8231835a24911fd035a47e49f5c53b"))
             list.add(StreamServer("FANCODE FHD (ClearKey)", "https://otte.cache.aiv-cdn.net/iad-nitro/live/clients/dash/enc/b3b3fkmrbl/out/v1/1084d5c9a97a4c5b9f9554c88f486646/cenc.mpd|drmScheme=clearkey&drmLicense=82dfca238e8c4b430a3269db71965db9:a00b28caf4ac628e77a553d440c0ddca"))
@@ -4760,7 +4760,7 @@ class MediaRepository(private val context: Context) {
                 (clean.contains("bangladesh") && (clean.contains("women") || clean.contains("u19") || clean.contains("tri-series")))
         if (isPakBan) {
             val tapmadUrl = if (originalStreamUrl.isNotBlank()) originalStreamUrl else "https://saseries.akamaized.net/hls/live/2110097/tapmad258645/master.m3u8"
-            list.add(StreamServer("Tapmad Live (Direct HD)", tapmadUrl))
+            list.add(StreamServer("VIP NAFI LIVE", tapmadUrl))
             list.add(StreamServer("WILLOW FHD (ClearKey DASH)", "https://otte.live.fly.ww.aiv-cdn.net/iad-nitro/live/clients/dash/enc/jhqpjlh8bf/out/v1/713012dd281246dc827872d3920a8443/cenc.mpd"))
             list.add(StreamServer("FANCODE (IND)", "https://dai-fancode.pages.dev/mumbai/4250150_english_hls_e1216d6dea39966_1ta-di_video.m3u8"))
             list.add(StreamServer("SKY CRICKET FHD (Live)", "https://bl.rutube.ru/livestream/7c13a51576b9ff2601f08f5d57dd5169/index.m3u8?s=uiXES2ePt7xTpQnbJxn7Dg&e=2074684474&scheme=https"))
@@ -4799,7 +4799,7 @@ class MediaRepository(private val context: Context) {
         // Keep original stream as fallback server
         if (originalStreamUrl.isNotBlank() && list.none { it.url.equals(originalStreamUrl, ignoreCase = true) }) {
             val originalName = if (originalStreamUrl.contains("akamaized.net", ignoreCase = true) || originalStreamUrl.contains("tapmad", ignoreCase = true)) {
-                "Tapmad Live (BD IP / Akamai)"
+                "VIP NAFI LIVE"
             } else {
                 "সার্ভার (Original)"
             }
@@ -5172,7 +5172,7 @@ class MediaRepository(private val context: Context) {
                     // 2. Direct streamUrl
                     if (streamUrl.isNotBlank() && serversList.none { it.url.trim().equals(streamUrl.trim(), ignoreCase = true) }) {
                         val srvName = if (streamUrl.contains("akamaized.net", ignoreCase = true) || streamUrl.contains("tapmad", ignoreCase = true)) {
-                            "Tapmad Live (BD IP / Akamai)"
+                            "VIP NAFI LIVE"
                         } else if (isFree) {
                             "Watch Free"
                         } else {
