@@ -6,6 +6,51 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+// Automatically ensure google-services.json exists so build never fails on CI or missing file
+val googleServicesFile = file("google-services.json")
+if (!googleServicesFile.exists() || googleServicesFile.length() == 0L) {
+  googleServicesFile.writeText(
+    """{
+  "project_info": {
+    "project_number": "69630054093",
+    "project_id": "gen-lang-client-0255825339",
+    "storage_bucket": "gen-lang-client-0255825339.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:69630054093:android:7b6aab91f3900869216384",
+        "android_client_info": {
+          "package_name": "com.aistudio.nafitv.yxosih"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "69630054093-hlseoh6m228telipj3pvt1jbu89532mh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.nafitv.yxosih",
+            "certificate_hash": "8071126455053f89513f2780fc8c776ba0f6ed03"
+          }
+        },
+        {
+          "client_id": "69630054093-71n754k4e92j00skqufn99r8pmtmkjsr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDq6zYiTJHDqYxH_2PV-RsKWPFj_8eSpy0"
+        }
+      ],
+      "services": {}
+    }
+  ],
+  "configuration_version": "1"
+}"""
+  )
+}
+
 android {
   namespace = "com.example"
   compileSdk = 36

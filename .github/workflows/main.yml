@@ -70,6 +70,67 @@ jobs:
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Restore or Generate google-services.json
+        run: |
+          mkdir -p app
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > app/google-services.json
+          fi
+          if [ ! -s "app/google-services.json" ]; then
+            echo "app/google-services.json missing, generating default Firebase configuration..."
+            cat << 'EOF' > app/google-services.json
+{
+  "project_info": {
+    "project_number": "69630054093",
+    "project_id": "gen-lang-client-0255825339",
+    "storage_bucket": "gen-lang-client-0255825339.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:69630054093:android:7b6aab91f3900869216384",
+        "android_client_info": {
+          "package_name": "com.aistudio.nafitv.yxosih"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "69630054093-hlseoh6m228telipj3pvt1jbu89532mh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aistudio.nafitv.yxosih",
+            "certificate_hash": "8071126455053f89513f2780fc8c776ba0f6ed03"
+          }
+        },
+        {
+          "client_id": "69630054093-71n754k4e92j00skqufn99r8pmtmkjsr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDq6zYiTJHDqYxH_2PV-RsKWPFj_8eSpy0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "69630054093-71n754k4e92j00skqufn99r8pmtmkjsr.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+EOF
+          fi
+          echo "Verified app/google-services.json:"
+          ls -lh app/google-services.json
+
       - name: Accept Android SDK Licenses & Setup Platforms
         run: |
           yes | sdkmanager --licenses 2>/dev/null || true
