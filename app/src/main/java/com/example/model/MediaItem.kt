@@ -261,7 +261,7 @@ data class PlaylistInfo(
     val isMovieOnly: Boolean = false
 ) {
     val isProtected: Boolean get() = isAdmin || isReadOnly
-    val isMoviePlaylist: Boolean get() = isMovieOnly || type.equals("MOVIE", ignoreCase = true) || id.startsWith("pl_ott_") || id.startsWith("movie_") || (description != null && description.contains("Movie", ignoreCase = true))
+    val isMoviePlaylist: Boolean get() = isMovieOnly || type.equals("MOVIE", ignoreCase = true) || id.startsWith("pl_ott_") || id.startsWith("pl_movie_") || id.startsWith("movie_") || (description != null && description.contains("Movie", ignoreCase = true))
 }
 
 data class MovieProvider(

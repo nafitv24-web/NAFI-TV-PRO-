@@ -271,7 +271,12 @@ fun NafiTvMainApp(
     var moviesList by remember {
         mutableStateOf(repository.getInitialMoviesSeries())
     }
-    var playlistsList by remember { mutableStateOf(repository.getInitialPlaylists() + repository.getCustomPlaylists()) }
+    var playlistsList by remember {
+        val nonMovie = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
+            it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+        }
+        mutableStateOf(nonMovie)
+    }
     var adminPlaylistsList by remember { mutableStateOf(repository.getInitialPlaylists() + repository.getAdminPlaylists()) }
     var customList by remember { mutableStateOf(repository.getCustomStreams()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
@@ -489,7 +494,11 @@ fun NafiTvMainApp(
 
                             withContext(Dispatchers.Main) {
                                 adminPlaylistsList = allPlaylists
-                                playlistsList = allPlaylists
+                                playlistsList = allPlaylists.filterNot {
+                                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
+                                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
+                                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+                                }
                             }
 
                             // Firebase extra items
@@ -717,7 +726,11 @@ fun NafiTvMainApp(
                 val adminPl = repository.getAdminPlaylists().map { it.copy(isAdmin = true, isReadOnly = true) }
                 val userPl = repository.getUserPlaylists().map { it.copy(isAdmin = false, isReadOnly = false) }
                 adminPlaylistsList = (adminPl + userPl + initial).distinctBy { it.id }
-                playlistsList = adminPlaylistsList
+                playlistsList = adminPlaylistsList.filterNot {
+                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
+                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
+                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+                }
                 sportsList = repository.getInitialSports().filterNot { repository.isItemDeleted(it) }
                 customList = repository.getCustomStreams()
                 refreshAllData()

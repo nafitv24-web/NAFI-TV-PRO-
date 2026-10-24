@@ -122,18 +122,15 @@ fun isPureMovieOrSeries(item: MediaItem): Boolean {
     val cat = item.category.lowercase()
     val liveKeywords = listOf(
         "live tv", "sports", "cricket", "football", "news", "bangladesh tv", "bd tv",
-        "indian tv", "telecom", "channel", "live-event", "live matches", "sport"
+        "telecom", "channel", "live-event", "live matches", "sport"
     )
-    if (liveKeywords.any { cat.contains(it) }) return false
+    if (liveKeywords.any { cat.equals(it) || cat.startsWith("$it ") || cat.endsWith(" $it") || (cat.contains(it) && !cat.contains("movie") && !cat.contains("series") && !cat.contains("cinema")) }) return false
 
     val title = item.title.lowercase()
     if (title.contains(" vs ") || title.contains(" v ") || (title.contains(" live ") && !title.contains("alive"))) return false
 
     val url = item.streamUrl.lowercase()
     if (url.contains("/live/") && !url.contains("/movie/") && !url.contains("/series/")) return false
-    if (url.endsWith(".m3u8") && (cat.contains("tv") || title.contains("tv") || cat.contains("channel"))) {
-        if (!url.contains("movie") && !url.contains("vod") && !url.contains("series")) return false
-    }
 
     return true
 }
@@ -166,6 +163,11 @@ fun MoviesTabScreen(
     var selectedHub by remember { mutableStateOf<MovieHubItem?>(null) }
     var isHubLoading by remember { mutableStateOf(false) }
     val hubMoviesCache = remember { mutableStateMapOf<String, List<MediaItem>>() }
+    var hubsRefreshTrigger by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        hubsRefreshTrigger++
+    }
 
     // BackHandler: If inside a selected server, back press pops back to All Movies showcase
     BackHandler(enabled = selectedHub != null) {
@@ -183,13 +185,15 @@ fun MoviesTabScreen(
     }
 
     // Build the list of Admin-added Xtream Servers, Playlists, and OTT Platforms
-    // Only includes what was added from the Admin Panel (No extra dummy demos like unconfigured Hotstar/Netflix)
-    val adminHubs = remember(repository) {
+    // Only includes what was added from the Admin Panel specifically for movies/VOD
+    val adminHubs = remember(repository, hubsRefreshTrigger, movies.size) {
         val hubs = mutableListOf<MovieHubItem>()
 
         if (repository != null) {
-            // 1. Xtream Codes Accounts configured in Admin Panel
-            val xtreamAccounts = repository.getXtreamAccounts().filter { it.isEnabled }
+            // 1. Xtream Codes Accounts configured in Admin Panel (Movie/VOD capable only)
+            val xtreamAccounts = repository.getXtreamAccounts().filter {
+                it.isEnabled && (it.includeVod || it.includeSeries || it.id.startsWith("xtream_ott_"))
+            }
             val xtreamGradients = listOf(
                 listOf(Color(0xFF0F766E), Color(0xFF042F2E)), // Emerald/Cyan
                 listOf(Color(0xFF1D4ED8), Color(0xFF0F172A)), // Royal Blue
@@ -235,8 +239,10 @@ fun MoviesTabScreen(
                 )
             }
 
-            // 2. Custom & Admin Movie Playlists configured in Admin Panel
-            val customPlaylists = repository.getCustomPlaylists()
+            // 2. Custom & Admin Movie Playlists configured in Admin Panel (Movie playlists only)
+            val customPlaylists = (repository.getAdminPlaylists() + repository.getUserPlaylists()).filter {
+                it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || it.isMoviePlaylist || (it.description != null && it.description.contains("OTT Movie", ignoreCase = true))
+            }.distinctBy { it.id }
             val plGradients = listOf(
                 listOf(Color(0xFFC2410C), Color(0xFF431407)), // Amber/Orange
                 listOf(Color(0xFF0369A1), Color(0xFF082F49)), // Sky Blue

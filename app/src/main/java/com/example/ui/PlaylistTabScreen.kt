@@ -334,8 +334,9 @@ fun PlaylistTabScreen(
                     it.isMovieOnly ||
                     it.type.equals("MOVIE", ignoreCase = true) ||
                     it.id.startsWith("pl_ott_") ||
+                    it.id.startsWith("pl_movie_") ||
                     it.id.startsWith("movie_") ||
-                    (it.description != null && it.description.contains("OTT Movie", ignoreCase = true))
+                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
                 }
                 if (searchQuery.isBlank()) nonMoviePlaylists else {
                     nonMoviePlaylists.filter {
