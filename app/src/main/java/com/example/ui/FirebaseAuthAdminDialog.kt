@@ -527,6 +527,7 @@ fun FirebaseAuthAdminDialog(
                             value = password,
                             onValueChange = { password = it; errorMessage = null },
                             label = { Text("অ্যাকাউন্ট পাসওয়ার্ড", color = Color(0xFF94A3B8), fontSize = 12.sp) },
+                            placeholder = { Text("যেমন: NMD646542", color = Color(0xFF64748B), fontSize = 12.sp) },
                             leadingIcon = {
                                 Icon(Icons.Rounded.Lock, contentDescription = null, tint = Color(0xFF00E5FF))
                             },
