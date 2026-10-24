@@ -78,55 +78,7 @@ jobs:
           fi
           if [ ! -s "app/google-services.json" ]; then
             echo "app/google-services.json missing, generating default Firebase configuration..."
-            cat << 'EOF' > app/google-services.json
-{
-  "project_info": {
-    "project_number": "69630054093",
-    "project_id": "gen-lang-client-0255825339",
-    "storage_bucket": "gen-lang-client-0255825339.firebasestorage.app"
-  },
-  "client": [
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:69630054093:android:7b6aab91f3900869216384",
-        "android_client_info": {
-          "package_name": "com.aistudio.nafitv.yxosih"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "69630054093-hlseoh6m228telipj3pvt1jbu89532mh.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.aistudio.nafitv.yxosih",
-            "certificate_hash": "8071126455053f89513f2780fc8c776ba0f6ed03"
-          }
-        },
-        {
-          "client_id": "69630054093-71n754k4e92j00skqufn99r8pmtmkjsr.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyDq6zYiTJHDqYxH_2PV-RsKWPFj_8eSpy0"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "69630054093-71n754k4e92j00skqufn99r8pmtmkjsr.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "configuration_version": "1"
-}
-EOF
+            echo "ewogICJwcm9qZWN0X2luZm8iOiB7CiAgICAicHJvamVjdF9udW1iZXIiOiAiNjk2MzAwNTQwOTMiLAogICAgInByb2plY3RfaWQiOiAiZ2VuLWxhbmctY2xpZW50LTAyNTU4MjUzMzkiLAogICAgInN0b3JhZ2VfYnVja2V0IjogImdlbi1sYW5nLWNsaWVudC0wMjU1ODI1MzM5LmZpcmViYXNlc3RvcmFnZS5hcHAiCiAgfSwKICAiY2xpZW50IjogWwogICAgewogICAgICAiY2xpZW50X2luZm8iOiB7CiAgICAgICAgIm1vYmlsZXNka19hcHBfaWQiOiAiMTo2OTYzMDA1NDA5MzphbmRyb2lkOjdiNmFhYjkxZjM5MDA4NjkyMTYzODQiLAogICAgICAgICJhbmRyb2lkX2NsaWVudF9pbmZvIjogewogICAgICAgICAgInBhY2thZ2VfbmFtZSI6ICJjb20uYWlzdHVkaW8ubmFmaXR2Lnl4b3NpaCIKICAgICAgICB9CiAgICAgIH0sCiAgICAgICJvYXV0aF9jbGllbnQiOiBbCiAgICAgICAgewogICAgICAgICAgImNsaWVudF9pZCI6ICI2OTYzMDA1NDA5My1obHNlb2g2bTIyOHRlbGlwajNwdnQxamJ1ODk1MzJtaC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbSIsCiAgICAgICAgICAiY2xpZW50X3R5cGUiOiAxLAogICAgICAgICAgImFuZHJvaWRfaW5mbyI6IHsKICAgICAgICAgICAgInBhY2thZ2VfbmFtZSI6ICJjb20uYWlzdHVkaW8ubmFmaXR2Lnl4b3NpaCIsCiAgICAgICAgICAgICJjZXJ0aWZpY2F0ZV9oYXNoIjogIjgwNzExMjY0NTUwNTNmODk1MTNmMjc4MGZjOGM3NzZiYTBmNmVkMDMiCiAgICAgICAgICB9CiAgICAgICAgfSwKICAgICAgICB7CiAgICAgICAgICAiY2xpZW50X2lkIjogIjY5NjMwMDU0MDkzLTcxbjc1NGs0ZTkyajAwc2txdWZuOTlyOHBtdG1ranNyLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29tIiwKICAgICAgICAgICJjbGllbnRfdHlwZSI6IDMKICAgICAgICB9CiAgICAgIF0sCiAgICAgICJhcGlfa2V5IjogWwogICAgICAgIHsKICAgICAgICAgICJjdXJyZW50X2tleSI6ICJBSXphU3lEcTZ6WWlUSkhEcVl4SF8yUFYtUnNLV1BGal84ZVNweTAiCiAgICAgICAgfQogICAgICBdLAogICAgICAic2VydmljZXMiOiB7CiAgICAgICAgImFwcGludml0ZV9zZXJ2aWNlIjogewogICAgICAgICAgIm90aGVyX3BsYXRmb3JtX29hdXRoX2NsaWVudCI6IFsKICAgICAgICAgICAgewogICAgICAgICAgICAgICJjbGllbnRfaWQiOiAiNjk2MzAwNTQwOTMtNzFuNzU0azRlOTJqMDBza3F1Zm45OXI4cG10bWtqc3IuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLAogICAgICAgICAgICAgICJjbGllbnRfdHlwZSI6IDMKICAgICAgICAgICAgfQogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgfQogIF0sCiAgImNvbmZpZ3VyYXRpb25fdmVyc2lvbiI6ICIxIgp9" | base64 -d > app/google-services.json
           fi
           echo "Verified app/google-services.json:"
           ls -lh app/google-services.json
