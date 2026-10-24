@@ -410,7 +410,7 @@ fun NafiTvMainApp(
                             }
 
                             val xtreamMoviesJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(4500) {
+                                kotlinx.coroutines.withTimeoutOrNull(20000) {
                                     try {
                                         repository.fetchAllXtreamMoviesFast().filterNot { deleted.contains(it.id) }
                                     } catch (_: Exception) { emptyList() }

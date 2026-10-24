@@ -2969,7 +2969,7 @@ fun AdminControlAppScreen(
                                                 xtreamAccountsList = repository.getXtreamAccounts()
                                                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
-                                                        val movies = repository.fetchXtreamAccountMovies(acc)
+                                                        val movies = repository.fetchXtreamAccountMovies(acc, forceRefresh = true)
                                                         if (movies.isNotEmpty()) {
                                                             val cur = repository.getCachedMoviesList()
                                                             repository.saveCachedMoviesList((movies + cur).distinctBy { it.id })
@@ -2997,7 +2997,7 @@ fun AdminControlAppScreen(
                                                 repository.pushPlaylistToFirebase(newPl)
                                                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
-                                                        val movies = repository.fetchPlaylistMoviesOnly(newPl)
+                                                        val movies = repository.fetchPlaylistMoviesOnly(newPl, forceRefresh = true)
                                                         if (movies.isNotEmpty()) {
                                                             val cur = repository.getCachedMoviesList()
                                                             repository.saveCachedMoviesList((movies + cur).distinctBy { it.id })
@@ -3871,7 +3871,7 @@ fun AdminControlAppScreen(
                                             repository.pushPlaylistToFirebase(newPl)
                                             if (isMovie) {
                                                 try {
-                                                    val movies = repository.fetchPlaylistMoviesOnly(newPl)
+                                                    val movies = repository.fetchPlaylistMoviesOnly(newPl, forceRefresh = true)
                                                     if (movies.isNotEmpty()) {
                                                         val cur = repository.getCachedMoviesList()
                                                         repository.saveCachedMoviesList((movies + cur).distinctBy { it.id })

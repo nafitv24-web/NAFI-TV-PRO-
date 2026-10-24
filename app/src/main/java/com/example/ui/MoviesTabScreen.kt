@@ -44,11 +44,13 @@ import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -321,7 +323,8 @@ fun MoviesTabScreen(
     // Load Hub Movies on-demand when user clicks an Xtream Server, Playlist, or OTT Platform Hub
     LaunchedEffect(selectedHub) {
         val hub = selectedHub ?: return@LaunchedEffect
-        if (!hubMoviesCache.containsKey(hub.id) && repository != null) {
+        val curCached = hubMoviesCache[hub.id]
+        if ((curCached == null || curCached.size <= 1000) && repository != null) {
             isHubLoading = true
             withContext(Dispatchers.IO) {
                 try {
@@ -419,9 +422,20 @@ fun MoviesTabScreen(
     }
 
     // The active source of movies: either the selected Hub's movies, or the general movies list
-    val currentActiveSourceMovies = remember(selectedHub, hubMoviesCache, movies, repository) {
+    val currentActiveSourceMovies = remember(selectedHub, hubMoviesCache.toMap(), movies, repository) {
         val rawList = if (selectedHub != null) {
-            hubMoviesCache[selectedHub!!.id] ?: repository?.getCachedXtreamAccountMovies(selectedHub!!.id) ?: repository?.getCachedPlaylistMovies(selectedHub!!.id) ?: emptyList()
+            val fromMem = hubMoviesCache[selectedHub!!.id]
+            val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub!!.id) ?: emptyList()
+            val fromPl = repository?.getCachedPlaylistMovies(selectedHub!!.id) ?: emptyList()
+            when {
+                fromMem != null && fromMem.size > 2000 -> fromMem
+                fromXtream.size > 2000 -> fromXtream
+                fromPl.size > 2000 -> fromPl
+                fromMem != null && fromMem.isNotEmpty() -> fromMem
+                fromXtream.isNotEmpty() -> fromXtream
+                fromPl.isNotEmpty() -> fromPl
+                else -> emptyList()
+            }
         } else {
             val base = if (movies.isNotEmpty()) movies else repository?.getInitialMoviesSeries() ?: repository?.getDefaultBuiltinMovies() ?: emptyList()
             val allConfigured = repository?.getAllCachedPlaylistAndXtreamMovies() ?: emptyList()
@@ -429,7 +443,8 @@ fun MoviesTabScreen(
         }
         // STRICT FILTER: Absolutely NO Live TV!
         rawList.filter { isPureMovieOrSeries(it) }.map {
-            if (it.type != MediaType.SERIES && !it.isSeries) it.copy(type = MediaType.MOVIE, isLive = false) else it.copy(isLive = false)
+            val isSer = it.isSeries || it.type == MediaType.SERIES || it.streamUrl.contains("/series/")
+            if (isSer) it.copy(type = MediaType.SERIES, isLive = false) else it.copy(type = MediaType.MOVIE, isLive = false)
         }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
     }
 
@@ -773,20 +788,65 @@ fun MoviesTabScreen(
                             }
                         }
 
-                        // Back to all hubs button
-                        Button(
-                            onClick = {
-                                selectedHub = null
-                                selectedCategory = "All"
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.height(30.dp)
-                        ) {
-                            Icon(Icons.Rounded.ArrowBack, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(13.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    val hub = selectedHub ?: return@IconButton
+                                    if (repository != null) {
+                                        isHubLoading = true
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            try {
+                                                val reloaded = when (hub.hubCategory) {
+                                                    HubCategory.XTREAM -> hub.xtreamAccount?.let { repository.fetchXtreamAccountMovies(it, forceRefresh = true) } ?: emptyList()
+                                                    HubCategory.PLAYLIST -> hub.playlist?.let { repository.fetchPlaylistMoviesOnly(it, forceRefresh = true) } ?: emptyList()
+                                                    else -> emptyList()
+                                                }
+                                                val strictlyPure = reloaded.filter { isPureMovieOrSeries(it) }
+                                                withContext(Dispatchers.Main) {
+                                                    if (strictlyPure.isNotEmpty()) {
+                                                        hubMoviesCache[hub.id] = strictlyPure
+                                                    }
+                                                    isHubLoading = false
+                                                }
+                                            } catch (_: Exception) {
+                                                withContext(Dispatchers.Main) { isHubLoading = false }
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                if (isHubLoading) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = Color(0xFF00E5FF),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Refresh,
+                                        contentDescription = "রিফ্রেশ করুন",
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("সকল প্ল্যাটফর্ম", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            // Back to all hubs button
+                            Button(
+                                onClick = {
+                                    selectedHub = null
+                                    selectedCategory = "All"
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Icon(Icons.Rounded.ArrowBack, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(13.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("সকল প্ল্যাটফর্ম", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
