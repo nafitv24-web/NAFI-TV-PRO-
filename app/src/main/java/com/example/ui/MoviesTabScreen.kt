@@ -396,12 +396,36 @@ fun MoviesTabScreen(
         }
     }
 
+    // Background pre-fetcher for configured movie playlists and Xtream servers
+    LaunchedEffect(Unit) {
+        if (repository != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val allPl = (repository.getAdminPlaylists() + repository.getUserPlaylists()).filter { it.isMovieOnly || it.isMoviePlaylist }
+                    for (pl in allPl) {
+                        if (repository.getCachedPlaylistMovies(pl.id).isEmpty()) {
+                            try { repository.fetchPlaylistMoviesOnly(pl) } catch (_: Exception) {}
+                        }
+                    }
+                    val allAcc = repository.getXtreamAccounts().filter { it.includeVod || it.includeSeries }
+                    for (acc in allAcc) {
+                        if (repository.getCachedXtreamAccountMovies(acc.id).isEmpty()) {
+                            try { repository.fetchXtreamAccountMovies(acc) } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     // The active source of movies: either the selected Hub's movies, or the general movies list
     val currentActiveSourceMovies = remember(selectedHub, hubMoviesCache, movies, repository) {
         val rawList = if (selectedHub != null) {
             hubMoviesCache[selectedHub!!.id] ?: repository?.getCachedXtreamAccountMovies(selectedHub!!.id) ?: repository?.getCachedPlaylistMovies(selectedHub!!.id) ?: emptyList()
         } else {
-            if (movies.isNotEmpty()) movies else repository?.getInitialMoviesSeries() ?: repository?.getDefaultBuiltinMovies() ?: emptyList()
+            val base = if (movies.isNotEmpty()) movies else repository?.getInitialMoviesSeries() ?: repository?.getDefaultBuiltinMovies() ?: emptyList()
+            val allConfigured = repository?.getAllCachedPlaylistAndXtreamMovies() ?: emptyList()
+            (allConfigured + base).distinctBy { it.id }
         }
         // STRICT FILTER: Absolutely NO Live TV!
         rawList.filter { isPureMovieOrSeries(it) }.map {

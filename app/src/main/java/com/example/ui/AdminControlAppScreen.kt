@@ -2965,6 +2965,7 @@ fun AdminControlAppScreen(
                                                     statusMessage = "সক্রিয় (Active)"
                                                 )
                                                 repository.saveXtreamAccount(acc)
+                                                repository.pushXtreamAccountToFirebase(acc)
                                                 xtreamAccountsList = repository.getXtreamAccounts()
                                                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
@@ -2976,10 +2977,16 @@ fun AdminControlAppScreen(
                                                     } catch (_: Exception) {}
                                                 }
                                             } else {
+                                                var cleanUrl = ottHubUrl.trim()
+                                                if (cleanUrl.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) &&
+                                                    (cleanUrl.contains("sm_movie2", ignoreCase = true) || cleanUrl.contains("Ott_Bnagla", ignoreCase = true) || cleanUrl.contains("movie_ftp", ignoreCase = true))) {
+                                                    cleanUrl = "https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u"
+                                                }
+
                                                 val newPl = PlaylistInfo(
                                                     id = "pl_ott_${System.currentTimeMillis()}",
                                                     title = ottHubName.trim(),
-                                                    url = ottHubUrl.trim(),
+                                                    url = cleanUrl,
                                                     logoUrl = ottHubLogoUrl.trim().takeIf { it.isNotBlank() },
                                                     description = "OTT Movie Playlist",
                                                     type = "MOVIE",
@@ -2999,7 +3006,7 @@ fun AdminControlAppScreen(
                                                 }
                                             }
                                             onDataChanged()
-                                            Toast.makeText(context, "✅ '$ottHubName' মুভি সেকশনে যুক্ত হয়েছে! ইউজাররা ক্লিক করে সব মুভি দেখতে পারবেন।", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, "✅ '$ottHubName' ফায়ারবেস এবং মুভি সেকশনে যুক্ত ও সিঙ্ক হয়েছে!", Toast.LENGTH_LONG).show()
                                             // Reset
                                             ottHubName = ""
                                             ottHubUrl = ""
@@ -3836,17 +3843,41 @@ fun AdminControlAppScreen(
                             Button(
                                 onClick = {
                                     if (playlistTitle.isNotBlank() && playlistUrl.isNotBlank()) {
+                                        var cleanUrl = playlistUrl.trim()
+                                        if (cleanUrl.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) &&
+                                            (cleanUrl.contains("sm_movie2", ignoreCase = true) || cleanUrl.contains("Ott_Bnagla", ignoreCase = true) || cleanUrl.contains("movie_ftp", ignoreCase = true))) {
+                                            cleanUrl = "https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u"
+                                        }
+
+                                        val isMovie = playlistTitle.contains("movie", ignoreCase = true) ||
+                                                playlistTitle.contains("cinema", ignoreCase = true) ||
+                                                cleanUrl.contains("movie", ignoreCase = true) ||
+                                                playlistDescription.contains("movie", ignoreCase = true) ||
+                                                playlistDescription.contains("মুভি", ignoreCase = true)
+
                                         val newPl = PlaylistInfo(
-                                            id = "pl_admin_${System.currentTimeMillis()}",
+                                            id = if (isMovie) "pl_ott_${System.currentTimeMillis()}" else "pl_admin_${System.currentTimeMillis()}",
                                             title = playlistTitle.trim(),
-                                            url = playlistUrl.trim(),
+                                            url = cleanUrl,
                                             logoUrl = playlistLogoUrl.trim().takeIf { it.isNotBlank() },
                                             description = playlistDescription.trim().takeIf { it.isNotBlank() },
-                                            channelCount = 0
+                                            channelCount = 0,
+                                            type = if (isMovie) "MOVIE" else "M3U",
+                                            isMovieOnly = isMovie,
+                                            isAdmin = true
                                         )
                                         repository.saveAdminPlaylist(newPl)
                                         coroutineScope.launch {
                                             repository.pushPlaylistToFirebase(newPl)
+                                            if (isMovie) {
+                                                try {
+                                                    val movies = repository.fetchPlaylistMoviesOnly(newPl)
+                                                    if (movies.isNotEmpty()) {
+                                                        val cur = repository.getCachedMoviesList()
+                                                        repository.saveCachedMoviesList((movies + cur).distinctBy { it.id })
+                                                    }
+                                                } catch (_: Exception) {}
+                                            }
                                         }
                                         onDataChanged()
                                         playlistTitle = ""

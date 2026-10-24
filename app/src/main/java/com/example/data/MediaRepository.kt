@@ -1299,6 +1299,14 @@ class MediaRepository(private val context: Context) {
     private suspend fun fetchSingleM3uUrl(url: String): List<MediaItem> = withContext(Dispatchers.IO) {
         try {
             var raw = url.trim()
+            // Smart auto-resolution for Monirul Islam's SM Movie Hub repository:
+            // sm_movie2.m3u, Ott_Bnagla.m3u and movie_ftp.m3u are empty 8-byte stubs in this repo.
+            // Movie_Combined.m3u and latest_movies.m3u contain 37,159+ active movies and web series!
+            if (raw.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) &&
+                (raw.contains("sm_movie2", ignoreCase = true) || raw.contains("Ott_Bnagla", ignoreCase = true) || raw.contains("movie_ftp", ignoreCase = true))) {
+                raw = "https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u"
+            }
+
             if (raw.contains(" ")) {
                 raw = raw.replace(" ", "%20")
             }
@@ -1332,9 +1340,9 @@ class MediaRepository(private val context: Context) {
             }
 
             val fastClient = client.newBuilder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(35, TimeUnit.SECONDS)
-                .callTimeout(50, TimeUnit.SECONDS)
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(90, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .build()
@@ -1353,9 +1361,18 @@ class MediaRepository(private val context: Context) {
                 val defType = if (isSports) MediaType.LIVE_EVENT else if (isMovieOrSeries) MediaType.MOVIE else MediaType.LIVE_TV
                 return@withContext parseMediaFromJsonString(content, defaultCategory = defCat, defaultType = defType)
             }
-            parseM3uLines(content.lines())
+            val parsed = parseM3uLines(content.lines())
+            if (parsed.isEmpty() && raw.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) && !raw.contains("Movie_Combined.m3u")) {
+                return@withContext fetchSingleM3uUrl("https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u")
+            }
+            parsed
         } catch (e: Exception) {
             e.printStackTrace()
+            if (url.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) && !url.contains("Movie_Combined.m3u")) {
+                try {
+                    return@withContext fetchSingleM3uUrl("https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u")
+                } catch (_: Exception) {}
+            }
             emptyList()
         }
     }
@@ -3265,6 +3282,185 @@ class MediaRepository(private val context: Context) {
         return getXtreamAccounts().filter { it.isEnabled }
     }
 
+    suspend fun pushXtreamAccountToFirebase(account: com.example.model.XtreamAccount, url: String = getSavedFirebaseUrl()): Boolean = withContext(Dispatchers.IO) {
+        var success = false
+        try {
+            // 1. Push to Firestore
+            val firestoreObj = JSONObject()
+            val fields = JSONObject()
+            fields.put("id", JSONObject().put("stringValue", account.id))
+            fields.put("name", JSONObject().put("stringValue", account.name))
+            fields.put("serverUrl", JSONObject().put("stringValue", account.serverUrl))
+            fields.put("username", JSONObject().put("stringValue", account.username))
+            fields.put("password", JSONObject().put("stringValue", account.password))
+            fields.put("isEnabled", JSONObject().put("booleanValue", account.isEnabled))
+            fields.put("includeLive", JSONObject().put("booleanValue", account.includeLive))
+            fields.put("includeVod", JSONObject().put("booleanValue", account.includeVod))
+            fields.put("includeSeries", JSONObject().put("booleanValue", account.includeSeries))
+            if (!account.logoUrl.isNullOrBlank()) {
+                fields.put("logoUrl", JSONObject().put("stringValue", account.logoUrl))
+            }
+            fields.put("lastSyncTime", JSONObject().put("integerValue", account.lastSyncTime.toString()))
+            fields.put("statusMessage", JSONObject().put("stringValue", account.statusMessage ?: "Active"))
+            firestoreObj.put("fields", fields)
+
+            val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            for (dbId in databases) {
+                try {
+                    val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/xtream_accounts/${account.id}?key=$FIREBASE_API_KEY"
+                    val req = Request.Builder().url(fsUrl).patch(fsBody).build()
+                    val resp = client.newCall(req).execute()
+                    if (resp.isSuccessful) success = true
+                } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Push to RTDB
+        if (url.isNotBlank()) {
+            try {
+                val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
+                val obj = JSONObject()
+                obj.put("id", account.id)
+                obj.put("name", account.name)
+                obj.put("serverUrl", account.serverUrl)
+                obj.put("username", account.username)
+                obj.put("password", account.password)
+                obj.put("isEnabled", account.isEnabled)
+                obj.put("includeLive", account.includeLive)
+                obj.put("includeVod", account.includeVod)
+                obj.put("includeSeries", account.includeSeries)
+                obj.put("logoUrl", account.logoUrl ?: "")
+                obj.put("lastSyncTime", account.lastSyncTime)
+                obj.put("statusMessage", account.statusMessage ?: "")
+
+                val body = obj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val targetUrl = appendRtdbAuth("$cleanUrl/xtream_accounts/${account.id}.json")
+                val req = Request.Builder().url(targetUrl).put(body).build()
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) success = true
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        success
+    }
+
+    suspend fun fetchXtreamAccountsFromFirebase(url: String = getSavedFirebaseUrl()): List<com.example.model.XtreamAccount> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<com.example.model.XtreamAccount>()
+        // 1. Fetch from Firestore
+        val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+        for (dbId in databases) {
+            try {
+                val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/xtream_accounts?key=$FIREBASE_API_KEY"
+                val req = Request.Builder().url(fsUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    if (body.startsWith("{")) {
+                        val json = JSONObject(body)
+                        val docs = json.optJSONArray("documents")
+                        if (docs != null) {
+                            for (i in 0 until docs.length()) {
+                                val doc = docs.optJSONObject(i) ?: continue
+                                val fields = doc.optJSONObject("fields") ?: continue
+                                fun s(k: String): String = fields.optJSONObject(k)?.optString("stringValue", "") ?: ""
+                                fun b(k: String, def: Boolean): Boolean = fields.optJSONObject(k)?.optBoolean("booleanValue", def) ?: def
+                                val docId = doc.optString("name").substringAfterLast("/")
+                                val id = s("id").ifBlank { docId }
+                                if (id.isNotBlank()) {
+                                    list.add(
+                                        com.example.model.XtreamAccount(
+                                            id = id,
+                                            name = s("name").ifBlank { "Xtream Server" },
+                                            serverUrl = s("serverUrl"),
+                                            username = s("username"),
+                                            password = s("password"),
+                                            isEnabled = b("isEnabled", true),
+                                            includeLive = b("includeLive", false),
+                                            includeVod = b("includeVod", true),
+                                            includeSeries = b("includeSeries", true),
+                                            logoUrl = s("logoUrl").takeIf { it.isNotBlank() },
+                                            lastSyncTime = fields.optJSONObject("lastSyncTime")?.optLong("integerValue", System.currentTimeMillis()) ?: System.currentTimeMillis(),
+                                            statusMessage = s("statusMessage").ifBlank { "Active" }
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 2. Fetch from RTDB
+        if (url.isNotBlank()) {
+            try {
+                val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
+                val targetUrl = appendRtdbAuth("$cleanUrl/xtream_accounts.json")
+                val req = Request.Builder().url(targetUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()?.trim() ?: ""
+                    if (body.startsWith("{")) {
+                        val obj = JSONObject(body)
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            val o = obj.optJSONObject(k) ?: continue
+                            val id = o.optString("id", k)
+                            if (list.none { it.id == id }) {
+                                list.add(
+                                    com.example.model.XtreamAccount(
+                                        id = id,
+                                        name = o.optString("name", "Xtream Server"),
+                                        serverUrl = o.optString("serverUrl"),
+                                        username = o.optString("username"),
+                                        password = o.optString("password"),
+                                        isEnabled = o.optBoolean("isEnabled", true),
+                                        includeLive = o.optBoolean("includeLive", false),
+                                        includeVod = o.optBoolean("includeVod", true),
+                                        includeSeries = o.optBoolean("includeSeries", true),
+                                        logoUrl = o.optString("logoUrl").takeIf { it.isNotBlank() },
+                                        lastSyncTime = o.optLong("lastSyncTime", System.currentTimeMillis()),
+                                        statusMessage = o.optString("statusMessage", "Active")
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        val distinct = list.distinctBy { it.id }
+        if (distinct.isNotEmpty()) {
+            val existing = getXtreamAccounts()
+            val merged = (distinct + existing).distinctBy { it.id }
+            saveXtreamAccountsList(merged)
+        }
+        distinct
+    }
+
+    fun getAllCachedPlaylistAndXtreamMovies(): List<MediaItem> {
+        val result = mutableListOf<MediaItem>()
+        val allPl = (getAdminPlaylists() + getUserPlaylists()).filter { it.isMovieOnly || it.isMoviePlaylist }
+        for (pl in allPl) {
+            val cached = getCachedPlaylistMovies(pl.id)
+            if (cached.isNotEmpty()) {
+                result.addAll(cached)
+            }
+        }
+        for (acc in getXtreamAccounts()) {
+            val cached = getCachedXtreamAccountMovies(acc.id)
+            if (cached.isNotEmpty()) {
+                result.addAll(cached)
+            }
+        }
+        return result.distinctBy { it.id }
+    }
+
     suspend fun fetchXtreamVodOnly(
         serverUrl: String = "http://rgkkw.live:80",
         username: String = "4dfoydR2gZ",
@@ -4674,8 +4870,9 @@ class MediaRepository(private val context: Context) {
 
     suspend fun pushPlaylistToFirebase(playlist: PlaylistInfo, url: String = getSavedFirebaseUrl()): Boolean = withContext(Dispatchers.IO) {
         var success = false
+        val isMovie = playlist.isMovieOnly || playlist.isMoviePlaylist || playlist.type.equals("MOVIE", ignoreCase = true) || playlist.id.startsWith("pl_ott_") || playlist.id.startsWith("pl_movie_")
 
-        // 1. Push to Firestore
+        // 1. Push to Firestore (both playlists and movie_playlists collection)
         try {
             val firestoreObj = JSONObject()
             val fields = JSONObject()
@@ -4700,9 +4897,10 @@ class MediaRepository(private val context: Context) {
             if (!playlist.password.isNullOrBlank()) {
                 fields.put("password", JSONObject().put("stringValue", playlist.password))
             }
-            fields.put("type", JSONObject().put("stringValue", playlist.type))
+            fields.put("type", JSONObject().put("stringValue", if (isMovie) "MOVIE" else playlist.type))
             fields.put("isAdmin", JSONObject().put("booleanValue", true))
             fields.put("isReadOnly", JSONObject().put("booleanValue", true))
+            fields.put("isMovieOnly", JSONObject().put("booleanValue", isMovie))
 
             firestoreObj.put("fields", fields)
             val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -4710,13 +4908,14 @@ class MediaRepository(private val context: Context) {
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
             for (dbId in databases) {
                 try {
-                    val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/playlists/${playlist.id}?key=$FIREBASE_API_KEY"
-                    val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
-                    val fsResp = client.newCall(fsReq).execute()
-                    if (fsResp.isSuccessful) success = true
-                } catch (e: Exception) {
-                    // continue
-                }
+                    val collections = if (isMovie) listOf("playlists", "movie_playlists") else listOf("playlists")
+                    for (col in collections) {
+                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$col/${playlist.id}?key=$FIREBASE_API_KEY"
+                        val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
+                        val fsResp = client.newCall(fsReq).execute()
+                        if (fsResp.isSuccessful) success = true
+                    }
+                } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -4738,15 +4937,19 @@ class MediaRepository(private val context: Context) {
                 obj.put("serverUrl", playlist.serverUrl ?: "")
                 obj.put("username", playlist.username ?: "")
                 obj.put("password", playlist.password ?: "")
-                obj.put("type", playlist.type)
+                obj.put("type", if (isMovie) "MOVIE" else playlist.type)
                 obj.put("isAdmin", true)
                 obj.put("isReadOnly", true)
+                obj.put("isMovieOnly", isMovie)
 
                 val body = obj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-                val targetUrl = appendRtdbAuth("$cleanUrl/playlists/${playlist.id}.json")
-                val req = Request.Builder().url(targetUrl).put(body).build()
-                val resp = client.newCall(req).execute()
-                if (resp.isSuccessful) success = true
+                val endpoints = if (isMovie) listOf("$cleanUrl/playlists/${playlist.id}.json", "$cleanUrl/movie_playlists/${playlist.id}.json") else listOf("$cleanUrl/playlists/${playlist.id}.json")
+                for (ep in endpoints) {
+                    val targetUrl = appendRtdbAuth(ep)
+                    val req = Request.Builder().url(targetUrl).put(body).build()
+                    val resp = client.newCall(req).execute()
+                    if (resp.isSuccessful) success = true
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -4757,132 +4960,145 @@ class MediaRepository(private val context: Context) {
     suspend fun fetchPlaylistsFromFirebase(url: String = getSavedFirebaseUrl()): List<PlaylistInfo> = withContext(Dispatchers.IO) {
         val deleted = getDeletedIds()
         coroutineScope {
-            // 1. Fetch from Firestore (parallel per database)
+            // 1. Fetch from Firestore (playlists and movie_playlists)
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
             val fsJobs = databases.map { dbId ->
                 async {
                     val dbList = mutableListOf<PlaylistInfo>()
-                    try {
-                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/playlists?key=$FIREBASE_API_KEY"
-                        val req = Request.Builder().url(fsUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
-                        val resp = client.newCall(req).execute()
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string() ?: ""
-                            if (body.isNotBlank() && body.startsWith("{")) {
-                                val json = JSONObject(body)
-                                val docs = json.optJSONArray("documents")
-                                if (docs != null) {
-                                    for (i in 0 until docs.length()) {
-                                        val doc = docs.optJSONObject(i) ?: continue
-                                        val name = doc.optString("name", "")
-                                        val docId = name.substringAfterLast("/")
-                                        if (docId.isBlank() || deleted.contains(docId)) continue
+                    val collections = listOf("playlists", "movie_playlists")
+                    for (col in collections) {
+                        try {
+                            val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$col?key=$FIREBASE_API_KEY"
+                            val req = Request.Builder().url(fsUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
+                            val resp = client.newCall(req).execute()
+                            if (resp.isSuccessful) {
+                                val body = resp.body?.string() ?: ""
+                                if (body.isNotBlank() && body.startsWith("{")) {
+                                    val json = JSONObject(body)
+                                    val docs = json.optJSONArray("documents")
+                                    if (docs != null) {
+                                        for (i in 0 until docs.length()) {
+                                            val doc = docs.optJSONObject(i) ?: continue
+                                            val name = doc.optString("name", "")
+                                            val docId = name.substringAfterLast("/")
+                                            if (docId.isBlank() || deleted.contains(docId)) continue
 
-                                        val fields = doc.optJSONObject("fields") ?: continue
-                                        fun s(k: String): String = fields.optJSONObject(k)?.optString("stringValue", "") ?: ""
-                                        fun count(k: String): Int = fields.optJSONObject(k)?.optInt("integerValue", 0) ?: 0
+                                            val fields = doc.optJSONObject("fields") ?: continue
+                                            fun s(k: String): String = fields.optJSONObject(k)?.optString("stringValue", "") ?: ""
+                                            fun b(k: String, def: Boolean): Boolean = fields.optJSONObject(k)?.optBoolean("booleanValue", def) ?: def
+                                            fun count(k: String): Int = fields.optJSONObject(k)?.optInt("integerValue", 0) ?: 0
 
-                                        val pId = s("id").ifBlank { docId }
-                                        if (!deleted.contains(pId)) {
-                                            dbList.add(
-                                                PlaylistInfo(
-                                                    id = pId,
-                                                    title = s("title").ifBlank { s("name").ifBlank { "Playlist" } },
-                                                    url = s("url"),
-                                                    logoUrl = s("logoUrl").ifBlank { s("logo") }.takeIf { it.isNotBlank() },
-                                                    description = s("description").takeIf { it.isNotBlank() },
-                                                    channelCount = count("channelCount"),
-                                                    serverUrl = s("serverUrl").takeIf { it.isNotBlank() },
-                                                    username = s("username").takeIf { it.isNotBlank() },
-                                                    password = s("password").takeIf { it.isNotBlank() },
-                                                    type = s("type").ifBlank { if (s("serverUrl").isNotBlank() || s("username").isNotBlank()) "XTREAM" else "M3U" },
-                                                    isAdmin = true,
-                                                    isReadOnly = true
+                                            val pId = s("id").ifBlank { docId }
+                                            if (!deleted.contains(pId)) {
+                                                val isMovie = col == "movie_playlists" || b("isMovieOnly", false) || s("type").equals("MOVIE", true) || pId.startsWith("pl_ott_") || pId.startsWith("pl_movie_") || s("description").contains("Movie", true)
+                                                dbList.add(
+                                                    PlaylistInfo(
+                                                        id = pId,
+                                                        title = s("title").ifBlank { s("name").ifBlank { "Playlist" } },
+                                                        url = s("url"),
+                                                        logoUrl = s("logoUrl").ifBlank { s("logo") }.takeIf { it.isNotBlank() },
+                                                        description = s("description").takeIf { it.isNotBlank() },
+                                                        channelCount = count("channelCount"),
+                                                        serverUrl = s("serverUrl").takeIf { it.isNotBlank() },
+                                                        username = s("username").takeIf { it.isNotBlank() },
+                                                        password = s("password").takeIf { it.isNotBlank() },
+                                                        type = if (isMovie) "MOVIE" else s("type").ifBlank { if (s("serverUrl").isNotBlank() || s("username").isNotBlank()) "XTREAM" else "M3U" },
+                                                        isAdmin = true,
+                                                        isReadOnly = true,
+                                                        isMovieOnly = isMovie
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                 }
                             }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                     dbList
                 }
             }
 
-            // 2. Fetch from RTDB
+            // 2. Fetch from RTDB (playlists and movie_playlists)
             val rtdbJob = async {
                 val rtdbList = mutableListOf<PlaylistInfo>()
                 if (url.isNotBlank()) {
-                    try {
-                        val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
-                        val targetUrl = appendRtdbAuth("$cleanUrl/playlists.json")
-                        val req = Request.Builder().url(targetUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
-                        val resp = client.newCall(req).execute()
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string()?.trim() ?: ""
-                            if (body.isNotEmpty() && body != "null") {
-                                if (body.startsWith("{")) {
-                                    val jsonObject = JSONObject(body)
-                                    val keys = jsonObject.keys()
-                                    while (keys.hasNext()) {
-                                        val k = keys.next()
-                                        if (!deleted.contains(k)) {
-                                            val obj = jsonObject.optJSONObject(k)
-                                            if (obj != null) {
-                                                val id = obj.optString("id", k)
-                                                if (!deleted.contains(id)) {
-                                                    rtdbList.add(
-                                                        PlaylistInfo(
-                                                            id = id,
-                                                            title = obj.optString("title", obj.optString("name", "Playlist")),
-                                                            url = obj.optString("url", ""),
-                                                            logoUrl = obj.optString("logoUrl", obj.optString("logo", null)).takeIf { it?.isNotBlank() == true },
-                                                            description = obj.optString("description", null).takeIf { it?.isNotBlank() == true },
-                                                            channelCount = obj.optInt("channelCount", 0),
-                                                            serverUrl = obj.optString("serverUrl", null).takeIf { it?.isNotBlank() == true },
-                                                            username = obj.optString("username", null).takeIf { it?.isNotBlank() == true },
-                                                            password = obj.optString("password", null).takeIf { it?.isNotBlank() == true },
-                                                            type = obj.optString("type", if (obj.has("serverUrl") || obj.has("username")) "XTREAM" else "M3U"),
-                                                            isAdmin = true,
-                                                            isReadOnly = true
+                    val endpoints = listOf("playlists", "movie_playlists")
+                    for (ep in endpoints) {
+                        try {
+                            val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
+                            val targetUrl = appendRtdbAuth("$cleanUrl/$ep.json")
+                            val req = Request.Builder().url(targetUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
+                            val resp = client.newCall(req).execute()
+                            if (resp.isSuccessful) {
+                                val body = resp.body?.string()?.trim() ?: ""
+                                if (body.isNotEmpty() && body != "null") {
+                                    if (body.startsWith("{")) {
+                                        val jsonObject = JSONObject(body)
+                                        val keys = jsonObject.keys()
+                                        while (keys.hasNext()) {
+                                            val k = keys.next()
+                                            if (!deleted.contains(k)) {
+                                                val obj = jsonObject.optJSONObject(k)
+                                                if (obj != null) {
+                                                    val id = obj.optString("id", k)
+                                                    if (!deleted.contains(id)) {
+                                                        val isMovie = ep == "movie_playlists" || obj.optBoolean("isMovieOnly", false) || obj.optString("type").equals("MOVIE", true) || id.startsWith("pl_ott_") || id.startsWith("pl_movie_") || obj.optString("description").contains("Movie", true)
+                                                        rtdbList.add(
+                                                            PlaylistInfo(
+                                                                id = id,
+                                                                title = obj.optString("title", obj.optString("name", "Playlist")),
+                                                                url = obj.optString("url", ""),
+                                                                logoUrl = obj.optString("logoUrl", obj.optString("logo", null)).takeIf { it?.isNotBlank() == true },
+                                                                description = obj.optString("description", null).takeIf { it?.isNotBlank() == true },
+                                                                channelCount = obj.optInt("channelCount", 0),
+                                                                serverUrl = obj.optString("serverUrl", null).takeIf { it?.isNotBlank() == true },
+                                                                username = obj.optString("username", null).takeIf { it?.isNotBlank() == true },
+                                                                password = obj.optString("password", null).takeIf { it?.isNotBlank() == true },
+                                                                type = if (isMovie) "MOVIE" else obj.optString("type", if (obj.has("serverUrl") || obj.has("username")) "XTREAM" else "M3U"),
+                                                                isAdmin = true,
+                                                                isReadOnly = true,
+                                                                isMovieOnly = isMovie
+                                                            )
                                                         )
-                                                    )
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                } else if (body.startsWith("[")) {
-                                    val jsonArr = JSONArray(body)
-                                    for (i in 0 until jsonArr.length()) {
-                                        val obj = jsonArr.optJSONObject(i) ?: continue
-                                        val id = obj.optString("id", "pl_rtdb_$i")
-                                        if (!deleted.contains(id)) {
-                                            rtdbList.add(
-                                                PlaylistInfo(
-                                                    id = id,
-                                                    title = obj.optString("title", obj.optString("name", "Playlist")),
-                                                    url = obj.optString("url", ""),
-                                                    logoUrl = obj.optString("logoUrl", obj.optString("logo", null)).takeIf { it?.isNotBlank() == true },
-                                                    description = obj.optString("description", null).takeIf { it?.isNotBlank() == true },
-                                                    channelCount = obj.optInt("channelCount", 0),
-                                                    serverUrl = obj.optString("serverUrl", null).takeIf { it?.isNotBlank() == true },
-                                                    username = obj.optString("username", null).takeIf { it?.isNotBlank() == true },
-                                                    password = obj.optString("password", null).takeIf { it?.isNotBlank() == true },
-                                                    type = obj.optString("type", if (obj.has("serverUrl") || obj.has("username")) "XTREAM" else "M3U"),
-                                                    isAdmin = true,
-                                                    isReadOnly = true
+                                    } else if (body.startsWith("[")) {
+                                        val jsonArr = JSONArray(body)
+                                        for (i in 0 until jsonArr.length()) {
+                                            val obj = jsonArr.optJSONObject(i) ?: continue
+                                            val id = obj.optString("id", "pl_rtdb_${ep}_$i")
+                                            if (!deleted.contains(id)) {
+                                                val isMovie = ep == "movie_playlists" || obj.optBoolean("isMovieOnly", false) || obj.optString("type").equals("MOVIE", true) || id.startsWith("pl_ott_") || id.startsWith("pl_movie_") || obj.optString("description").contains("Movie", true)
+                                                rtdbList.add(
+                                                    PlaylistInfo(
+                                                        id = id,
+                                                        title = obj.optString("title", obj.optString("name", "Playlist")),
+                                                        url = obj.optString("url", ""),
+                                                        logoUrl = obj.optString("logoUrl", obj.optString("logo", null)).takeIf { it?.isNotBlank() == true },
+                                                        description = obj.optString("description", null).takeIf { it?.isNotBlank() == true },
+                                                        channelCount = obj.optInt("channelCount", 0),
+                                                        serverUrl = obj.optString("serverUrl", null).takeIf { it?.isNotBlank() == true },
+                                                        username = obj.optString("username", null).takeIf { it?.isNotBlank() == true },
+                                                        password = obj.optString("password", null).takeIf { it?.isNotBlank() == true },
+                                                        type = if (isMovie) "MOVIE" else obj.optString("type", if (obj.has("serverUrl") || obj.has("username")) "XTREAM" else "M3U"),
+                                                        isAdmin = true,
+                                                        isReadOnly = true,
+                                                        isMovieOnly = isMovie
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                 }
                             }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
                 rtdbList
@@ -4890,7 +5106,15 @@ class MediaRepository(private val context: Context) {
 
             val allFs = fsJobs.awaitAll().flatten()
             val allRtdb = rtdbJob.await()
-            (allFs + allRtdb).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
+            val combined = (allFs + allRtdb).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
+            // Cache movie playlists so they are available immediately offline and in movies tab
+            val moviePls = combined.filter { it.isMovieOnly || it.isMoviePlaylist }
+            if (moviePls.isNotEmpty()) {
+                val currentAdmin = getAdminPlaylists()
+                val merged = (moviePls + currentAdmin).distinctBy { it.id }
+                saveAdminPlaylistsList(merged)
+            }
+            combined
         }
     }
 

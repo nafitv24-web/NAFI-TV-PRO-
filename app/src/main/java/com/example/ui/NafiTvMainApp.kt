@@ -523,6 +523,19 @@ fun NafiTvMainApp(
                                     }
                                 }
                             } catch (_: Exception) {}
+
+                            // Firebase Xtream accounts & Movie Hub syncing
+                            try {
+                                repository.fetchXtreamAccountsFromFirebase()
+                            } catch (_: Exception) {}
+                            try {
+                                val hubMovies = repository.getAllCachedPlaylistAndXtreamMovies()
+                                if (hubMovies.isNotEmpty()) {
+                                    withContext(Dispatchers.Main) {
+                                        moviesList = (hubMovies + moviesList).distinctBy { it.id }.filterNot { deleted.contains(it.id) }.sortedByDescending { it.movieSortWeight }
+                                    }
+                                }
+                            } catch (_: Exception) {}
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
