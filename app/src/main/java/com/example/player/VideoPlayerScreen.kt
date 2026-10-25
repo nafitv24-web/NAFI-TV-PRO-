@@ -810,14 +810,15 @@ fun VideoPlayerScreen(
         val isTapmad = finalCleanUrl.contains("tapmad", ignoreCase = true) ||
                 finalCleanUrl.contains("akamaized.net", ignoreCase = true) ||
                 currentMedia.category.contains("tapmad", ignoreCase = true)
+        val isWorkersDev = finalCleanUrl.contains("workers.dev", ignoreCase = true) ||
+                finalCleanUrl.contains("hridoytv", ignoreCase = true)
 
-        if (isTapmad) {
-            // CRITICAL: Network Stream (Video) Player & native player compatibility:
-            // Akamai CDN blocks requests containing web browser headers (Referer/Origin: tapmad.com).
-            // Native Android players (Network Stream Player, VLC, ExoPlayer) play Akamai streams with native UA and NO Referer/Origin!
+        if (isTapmad || isWorkersDev) {
+            // CRITICAL: Cloudflare workers and Akamai CDN block requests containing web browser headers (Referer/Origin).
+            // Native Android players play these streams with native UA and NO Referer/Origin!
             extractedReferer = null
             extractedOrigin = null
-            if (extractedUa.isNullOrBlank()) {
+            if (isTapmad && extractedUa.isNullOrBlank()) {
                 extractedUa = "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)"
             }
         }
@@ -908,13 +909,13 @@ fun VideoPlayerScreen(
         val finalUserAgent = fallbackUserAgents[playerRetryKey.coerceAtLeast(0) % fallbackUserAgents.size]
 
         val uriHost = try { android.net.Uri.parse(finalCleanUrl).host } catch (_: Exception) { null }
-        val streamHostReferer = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad) "https://$uriHost/" else null
-        val streamHostOrigin = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad) "https://$uriHost" else null
+        val streamHostReferer = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost/" else null
+        val streamHostOrigin = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost" else null
 
         val requestHeaders = mutableMapOf<String, String>()
         requestHeaders["User-Agent"] = finalUserAgent
         val finalReferer = when {
-            isTapmad -> null
+            isTapmad || isWorkersDev -> null
             !extractedReferer.isNullOrBlank() -> extractedReferer
             isToffee -> "https://toffeelive.com/"
             isXtreamStream -> null
@@ -922,7 +923,7 @@ fun VideoPlayerScreen(
             else -> streamHostReferer
         }
         val finalOrigin = when {
-            isTapmad -> null
+            isTapmad || isWorkersDev -> null
             !extractedOrigin.isNullOrBlank() -> extractedOrigin
             isToffee -> "https://toffeelive.com"
             isXtreamStream -> null
@@ -930,14 +931,14 @@ fun VideoPlayerScreen(
             else -> streamHostOrigin
         }
 
-        val suppressReferer = (playerRetryKey == 1) || isXtreamStream || isTapmad
+        val suppressReferer = (playerRetryKey == 1) || isXtreamStream || isTapmad || isWorkersDev
         if (!finalReferer.isNullOrBlank() && !suppressReferer) {
             requestHeaders["Referer"] = finalReferer
         }
         if (!finalOrigin.isNullOrBlank() && !suppressReferer) {
             requestHeaders["Origin"] = finalOrigin
         }
-        if (isTapmad) {
+        if (isTapmad || isWorkersDev) {
             requestHeaders.remove("Referer")
             requestHeaders.remove("Origin")
         }
@@ -1220,13 +1221,15 @@ fun VideoPlayerScreen(
                         ((currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT || currentMedia.isLive) && !isMp4 && !isMkv && !isWebm && !isMpd && !isFileHost))
 
                 if (isLiveStream && !isTs) {
-                    // Safe target live offset: only for HLS/DASH manifest streams
-                    val targetLiveOffset = if (isAkr4m) 22000L else 15000L
+                    // Safe target live offset: tuned for HLS/DASH manifest streams
+                    val targetLiveOffset = if (isWorkersDev) 3000L else if (isAkr4m) 22000L else 15000L
+                    val minOffset = if (isWorkersDev) 1500L else if (isAkr4m) 10000L else 6000L
+                    val maxOffset = if (isWorkersDev) 8000L else 60000L
                     mediaItemBuilder.setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
                             .setTargetOffsetMs(targetLiveOffset)
-                            .setMinOffsetMs(if (isAkr4m) 10000L else 6000L)
-                            .setMaxOffsetMs(60000L)
+                            .setMinOffsetMs(minOffset)
+                            .setMaxOffsetMs(maxOffset)
                             .setMinPlaybackSpeed(1.0f)
                             .setMaxPlaybackSpeed(1.01f)
                             .build()
@@ -1421,6 +1424,12 @@ fun VideoPlayerScreen(
 
                     override fun onPlayerError(error: PlaybackException) {
                         isBuffering = false
+                        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+                            error.cause is androidx.media3.exoplayer.source.BehindLiveWindowException) {
+                            seekToDefaultPosition()
+                            prepare()
+                            return
+                        }
                         val currentServers = currentMedia.getAllServers()
                         val httpEx = error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
                         val is405 = httpEx?.responseCode == 405

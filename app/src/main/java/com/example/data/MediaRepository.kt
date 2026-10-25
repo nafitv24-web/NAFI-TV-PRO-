@@ -476,18 +476,75 @@ class MediaRepository(private val context: Context) {
     private val memoryFileCache = java.util.concurrent.ConcurrentHashMap<String, List<MediaItem>>()
     private val cacheWriteExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
-    // Fast & Safe Local File Cache (JSON File storage - zero memory overhead in SharedPreferences, 0ms instant startup)
+    fun readJsonObjectFromReader(reader: android.util.JsonReader): JSONObject {
+        val obj = JSONObject()
+        reader.beginObject()
+        while (reader.hasNext()) {
+            val name = reader.nextName()
+            when (reader.peek()) {
+                android.util.JsonToken.STRING -> obj.put(name, reader.nextString())
+                android.util.JsonToken.NUMBER -> {
+                    val s = reader.nextString()
+                    if (s.contains(".")) obj.put(name, s.toDoubleOrNull() ?: 0.0)
+                    else obj.put(name, s.toLongOrNull() ?: 0L)
+                }
+                android.util.JsonToken.BOOLEAN -> obj.put(name, reader.nextBoolean())
+                android.util.JsonToken.NULL -> reader.nextNull()
+                android.util.JsonToken.BEGIN_ARRAY -> {
+                    val arr = JSONArray()
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        when (reader.peek()) {
+                            android.util.JsonToken.BEGIN_OBJECT -> arr.put(readJsonObjectFromReader(reader))
+                            android.util.JsonToken.STRING -> arr.put(reader.nextString())
+                            android.util.JsonToken.NUMBER -> {
+                                val ns = reader.nextString()
+                                if (ns.contains(".")) arr.put(ns.toDoubleOrNull() ?: 0.0)
+                                else arr.put(ns.toLongOrNull() ?: 0L)
+                            }
+                            android.util.JsonToken.BOOLEAN -> arr.put(reader.nextBoolean())
+                            android.util.JsonToken.NULL -> reader.nextNull()
+                            else -> reader.skipValue()
+                        }
+                    }
+                    reader.endArray()
+                    obj.put(name, arr)
+                }
+                android.util.JsonToken.BEGIN_OBJECT -> obj.put(name, readJsonObjectFromReader(reader))
+                else -> reader.skipValue()
+            }
+        }
+        reader.endObject()
+        return obj
+    }
+
+    // Fast & Safe Local File Cache (Streaming JSON storage - no 800 item limit, zero memory bloat)
     private fun saveListToFileCache(fileName: String, list: List<MediaItem>) {
-        val itemsToSave = if (list.size > 800) list.take(800) else list
+        val itemsToSave = list
         memoryFileCache[fileName] = itemsToSave
         cacheWriteExecutor.execute {
             try {
                 val file = java.io.File(context.filesDir, fileName)
-                val jsonArray = JSONArray()
-                itemsToSave.forEach { item ->
-                    jsonArray.put(serializeMediaToJsonObj(item))
+                val tempFile = java.io.File(context.filesDir, "$fileName.tmp")
+                tempFile.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    writer.write("[\n")
+                    itemsToSave.forEachIndexed { index, item ->
+                        try {
+                            val obj = serializeMediaToJsonObj(item)
+                            writer.write(obj.toString())
+                            if (index < itemsToSave.size - 1) {
+                                writer.write(",\n")
+                            } else {
+                                writer.write("\n")
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    writer.write("]")
                 }
-                file.writeText(jsonArray.toString())
+                if (tempFile.exists()) {
+                    if (file.exists()) file.delete()
+                    tempFile.renameTo(file)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -503,21 +560,42 @@ class MediaRepository(private val context: Context) {
         if (!file.exists()) return emptyList()
         val list = mutableListOf<MediaItem>()
         try {
-            val text = file.readText().trim()
-            if (text.startsWith("[")) {
-                val jsonArray = JSONArray(text)
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    val id = obj.optString("id", "item_$i")
-                    val item = parseMediaFromJsonObj(id, obj)
-                    if (!isItemDeleted(item) && !id.startsWith("sport_default_")) {
-                        list.add(item)
+            file.bufferedReader(Charsets.UTF_8).use { br ->
+                val reader = android.util.JsonReader(br)
+                if (reader.peek() == android.util.JsonToken.BEGIN_ARRAY) {
+                    reader.beginArray()
+                    var index = 0
+                    while (reader.hasNext()) {
+                        try {
+                            val obj = readJsonObjectFromReader(reader)
+                            val id = obj.optString("id", "item_$index")
+                            val item = parseMediaFromJsonObj(id, obj)
+                            if (!isItemDeleted(item) && !id.startsWith("sport_default_")) {
+                                list.add(item)
+                            }
+                        } catch (_: Exception) {}
+                        index++
                     }
+                    reader.endArray()
                 }
             }
             memoryFileCache[fileName] = list
         } catch (e: Exception) {
-            e.printStackTrace()
+            try {
+                val text = file.readText().trim()
+                if (text.startsWith("[")) {
+                    val jsonArray = JSONArray(text)
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.getJSONObject(i)
+                        val id = obj.optString("id", "item_$i")
+                        val item = parseMediaFromJsonObj(id, obj)
+                        if (!isItemDeleted(item) && !id.startsWith("sport_default_")) {
+                            list.add(item)
+                        }
+                    }
+                }
+                memoryFileCache[fileName] = list
+            } catch (_: Exception) {}
         }
         return list
     }
@@ -603,7 +681,32 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getDefaultBuiltinLiveTv(): List<MediaItem> {
+        val assetChannels = try {
+            val jsonString = context.assets.open("livetv.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            parseMediaFromJsonString(jsonString, defaultCategory = "BANGLADESH", defaultType = MediaType.LIVE_TV).map {
+                it.copy(type = MediaType.LIVE_TV, isLive = true)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+        if (assetChannels.isNotEmpty()) {
+            return assetChannels.filterNot { isDemoChannel(it) }
+        }
         return listOf(
+            MediaItem(
+                id = "tv_builtin_btv_news",
+                title = "BTV News",
+                category = "BANGLADESH",
+                type = MediaType.LIVE_TV,
+                streamUrl = "https://btv.hridoytv-channel.workers.dev/news.m3u8",
+                logoUrl = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQGFVQX3hXUtTTgwmRcWrehYFkfjeSiyHSSn1OCbWR6Yg&s",
+                isLive = true,
+                servers = listOf(
+                    StreamServer("সার্ভার ১ (Live HLS)", "https://btv.hridoytv-channel.workers.dev/news.m3u8"),
+                    StreamServer("সার্ভার ২", "https://robitv.com/rn/http://103.141.70.136:8080//bdtv/restrem/13.m3u8")
+                )
+            ),
             MediaItem(
                 id = "tv_builtin_nagorik",
                 title = "Nagorik TV",
@@ -628,7 +731,8 @@ class MediaRepository(private val context: Context) {
                 isLive = true,
                 servers = listOf(
                     StreamServer("সার্ভার ১", "http://livetv.akr4m.com:8080/bdtv/restrem/12.m3u8"),
-                    StreamServer("সার্ভার ২", "https://btv.hridoytv-channel.workers.dev/btv.m3u8")
+                    StreamServer("সার্ভার ২", "https://btv.hridoytv-channel.workers.dev/btv.m3u8"),
+                    StreamServer("সার্ভার ৩ (BTV News)", "https://btv.hridoytv-channel.workers.dev/news.m3u8")
                 )
             ),
             MediaItem(
@@ -1364,10 +1468,11 @@ class MediaRepository(private val context: Context) {
                 content = content.removePrefix("\uFEFF").trim()
             }
             if (content.startsWith("[") || content.startsWith("{")) {
-                val isSports = raw.contains("sport", ignoreCase = true) || raw.contains("event", ignoreCase = true) || raw.contains("match", ignoreCase = true) || raw.contains("live", ignoreCase = true) || content.contains("\"sport\"", ignoreCase = true)
-                val isMovieOrSeries = !isSports && (raw.contains("movie", ignoreCase = true) || raw.contains("series", ignoreCase = true) || content.contains("\"movies\"", ignoreCase = true) || content.contains("\"series\"", ignoreCase = true))
-                val defCat = if (isSports) "Sports" else if (isMovieOrSeries) "Movies" else "Live TV"
-                val defType = if (isSports) MediaType.LIVE_EVENT else if (isMovieOrSeries) MediaType.MOVIE else MediaType.LIVE_TV
+                val isExplicitLiveTv = raw.contains("channel", ignoreCase = true) || raw.contains("livetv", ignoreCase = true) || raw.contains("Update", ignoreCase = true) || raw.contains("bdtv", ignoreCase = true) || raw.contains("tv", ignoreCase = true)
+                val isSports = !isExplicitLiveTv && (raw.contains("sport", ignoreCase = true) || raw.contains("event", ignoreCase = true) || raw.contains("match", ignoreCase = true) || raw.contains("live", ignoreCase = true) || content.contains("\"sport\"", ignoreCase = true))
+                val isMovieOrSeries = !isExplicitLiveTv && !isSports && (raw.contains("movie", ignoreCase = true) || raw.contains("series", ignoreCase = true) || content.contains("\"movies\"", ignoreCase = true) || content.contains("\"series\"", ignoreCase = true))
+                val defCat = if (isExplicitLiveTv) "Live TV" else if (isSports) "Sports" else if (isMovieOrSeries) "Movies" else "Live TV"
+                val defType = if (isExplicitLiveTv) MediaType.LIVE_TV else if (isSports) MediaType.LIVE_EVENT else if (isMovieOrSeries) MediaType.MOVIE else MediaType.LIVE_TV
                 return@withContext parseMediaFromJsonString(content, defaultCategory = defCat, defaultType = defType)
             }
             val parsed = parseM3uLines(content.lines())
@@ -4133,53 +4238,59 @@ class MediaRepository(private val context: Context) {
             try {
                 val vodUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_vod_streams"
                 val fastClient = client.newBuilder()
-                    .connectTimeout(20, TimeUnit.SECONDS)
-                    .readTimeout(60, TimeUnit.SECONDS)
+                    .connectTimeout(25, TimeUnit.SECONDS)
+                    .readTimeout(90, TimeUnit.SECONDS)
                     .build()
                 val req = Request.Builder().url(vodUrl).header("User-Agent", "IPTVSmartersPro").build()
                 val resp = fastClient.newCall(req).execute()
                 if (resp.isSuccessful) {
-                    val body = resp.body?.string() ?: ""
-                    if (body.startsWith("[")) {
-                        val arr = JSONArray(body)
-                        for (i in 0 until arr.length()) {
-                            val obj = arr.optJSONObject(i) ?: continue
-                            val streamId = obj.optString("stream_id").takeIf { it.isNotBlank() } ?: continue
-                            val name = obj.optString("name", "Movie $streamId").trim()
-                            val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
-                            val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
-                            val catId = obj.optString("category_id")
-                            if (catId.isNotBlank()) coveredVodCatIds.add(catId)
-                            val catName = vodCatMap[catId] ?: obj.optString("category_name", "Movies")
-                            if (hideAdult && (isAdultCategory(catName) || isAdultCategory(name))) continue
-                            val rating = obj.optString("rating", "8.5")
-                            val added = obj.optString("added")
-                            val playUrl = "$cleanServer/movie/$cleanUser/$cleanPass/$streamId.$ext"
-                            val altPlayUrl = "$altServer/movie/$cleanUser/$cleanPass/$streamId.$ext"
+                    val stream = resp.body?.byteStream()
+                    if (stream != null) {
+                        val reader = android.util.JsonReader(stream.bufferedReader(Charsets.UTF_8))
+                        if (reader.peek() == android.util.JsonToken.BEGIN_ARRAY) {
+                            reader.beginArray()
+                            while (reader.hasNext()) {
+                                try {
+                                    val obj = readJsonObjectFromReader(reader)
+                                    val streamId = obj.optString("stream_id").takeIf { it.isNotBlank() } ?: continue
+                                    val name = obj.optString("name", "Movie $streamId").trim()
+                                    val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
+                                    val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
+                                    val catId = obj.optString("category_id")
+                                    if (catId.isNotBlank()) coveredVodCatIds.add(catId)
+                                    val catName = vodCatMap[catId] ?: obj.optString("category_name", "Movies")
+                                    if (hideAdult && (isAdultCategory(catName) || isAdultCategory(name))) continue
+                                    val rating = obj.optString("rating", "8.5")
+                                    val added = obj.optString("added")
+                                    val playUrl = "$cleanServer/movie/$cleanUser/$cleanPass/$streamId.$ext"
+                                    val altPlayUrl = "$altServer/movie/$cleanUser/$cleanPass/$streamId.$ext"
 
-                            val item = MediaItem(
-                                id = "xtream_vod_${account.id}_${streamId}",
-                                title = name,
-                                category = catName,
-                                type = MediaType.MOVIE,
-                                streamUrl = playUrl,
-                                backupUrl = altPlayUrl,
-                                servers = listOf(
-                                    StreamServer("সার্ভার ১ (VOD)", playUrl),
-                                    StreamServer("সার্ভার ২ (বিকল্প VOD)", altPlayUrl)
-                                ),
-                                logoUrl = icon,
-                                isLive = false,
-                                rating = rating,
-                                year = added.take(4),
-                                quality = "HD",
-                                userAgent = "IPTVSmartersPro",
-                                xtreamServerUrl = cleanServer,
-                                xtreamUsername = cleanUser,
-                                xtreamPassword = cleanPass
-                            )
-                            if (hideAdult && isAdultMedia(item)) continue
-                            vodItems.add(item)
+                                    val item = MediaItem(
+                                        id = "xtream_vod_${account.id}_${streamId}",
+                                        title = name,
+                                        category = catName,
+                                        type = MediaType.MOVIE,
+                                        streamUrl = playUrl,
+                                        backupUrl = altPlayUrl,
+                                        servers = listOf(
+                                            StreamServer("সার্ভার ১ (VOD)", playUrl),
+                                            StreamServer("সার্ভার ২ (বিকল্প VOD)", altPlayUrl)
+                                        ),
+                                        logoUrl = icon,
+                                        isLive = false,
+                                        rating = rating,
+                                        year = added.take(4),
+                                        quality = "HD",
+                                        userAgent = "IPTVSmartersPro",
+                                        xtreamServerUrl = cleanServer,
+                                        xtreamUsername = cleanUser,
+                                        xtreamPassword = cleanPass
+                                    )
+                                    if (hideAdult && isAdultMedia(item)) continue
+                                    vodItems.add(item)
+                                } catch (_: Exception) {}
+                            }
+                            reader.endArray()
                         }
                     }
                 }
@@ -4222,52 +4333,58 @@ class MediaRepository(private val context: Context) {
                 try {
                     val seriesUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_series"
                     val fastClient = client.newBuilder()
-                        .connectTimeout(20, TimeUnit.SECONDS)
-                        .readTimeout(60, TimeUnit.SECONDS)
+                        .connectTimeout(25, TimeUnit.SECONDS)
+                        .readTimeout(90, TimeUnit.SECONDS)
                         .build()
                     val req = Request.Builder().url(seriesUrl).header("User-Agent", "IPTVSmartersPro").build()
                     val resp = fastClient.newCall(req).execute()
                     if (resp.isSuccessful) {
-                        val body = resp.body?.string() ?: ""
-                        if (body.startsWith("[")) {
-                            val arr = JSONArray(body)
-                            for (i in 0 until arr.length()) {
-                                val obj = arr.optJSONObject(i) ?: continue
-                                val sId = obj.optString("series_id").takeIf { it.isNotBlank() } ?: continue
-                                val name = obj.optString("name", "Series $sId").trim()
-                                val cover = obj.optString("cover").takeIf { it.isNotBlank() }
-                                val plot = obj.optString("plot")
-                                val cast = obj.optString("cast")
-                                val rating = obj.optString("rating", "8.0")
-                                val releaseDate = obj.optString("releaseDate")
-                                val genre = obj.optString("genre")
-                                val catId = obj.optString("category_id")
-                                if (catId.isNotBlank()) coveredSeriesCatIds.add(catId)
-                                val catName = seriesCatMap[catId] ?: "Web Series"
-                                if (hideAdult && (isAdultCategory(catName) || isAdultCategory(name))) continue
+                        val stream = resp.body?.byteStream()
+                        if (stream != null) {
+                            val reader = android.util.JsonReader(stream.bufferedReader(Charsets.UTF_8))
+                            if (reader.peek() == android.util.JsonToken.BEGIN_ARRAY) {
+                                reader.beginArray()
+                                while (reader.hasNext()) {
+                                    try {
+                                        val obj = readJsonObjectFromReader(reader)
+                                        val sId = obj.optString("series_id").takeIf { it.isNotBlank() } ?: continue
+                                        val name = obj.optString("name", "Series $sId").trim()
+                                        val cover = obj.optString("cover").takeIf { it.isNotBlank() }
+                                        val plot = obj.optString("plot")
+                                        val cast = obj.optString("cast")
+                                        val rating = obj.optString("rating", "8.0")
+                                        val releaseDate = obj.optString("releaseDate")
+                                        val genre = obj.optString("genre")
+                                        val catId = obj.optString("category_id")
+                                        if (catId.isNotBlank()) coveredSeriesCatIds.add(catId)
+                                        val catName = seriesCatMap[catId] ?: "Web Series"
+                                        if (hideAdult && (isAdultCategory(catName) || isAdultCategory(name))) continue
 
-                                val item = MediaItem(
-                                    id = "xtream_series_${account.id}_${sId}",
-                                    title = name,
-                                    category = catName,
-                                    type = MediaType.SERIES,
-                                    streamUrl = "",
-                                    logoUrl = cover,
-                                    description = plot,
-                                    rating = rating,
-                                    year = releaseDate.take(4),
-                                    quality = "HD",
-                                    genre = genre,
-                                    cast = cast,
-                                    seriesId = sId,
-                                    isLive = false,
-                                    xtreamServerUrl = cleanServer,
-                                    xtreamUsername = cleanUser,
-                                    xtreamPassword = cleanPass,
-                                    userAgent = "IPTVSmartersPro"
-                                )
-                                if (hideAdult && isAdultMedia(item)) continue
-                                seriesItems.add(item)
+                                        val item = MediaItem(
+                                            id = "xtream_series_${account.id}_${sId}",
+                                            title = name,
+                                            category = catName,
+                                            type = MediaType.SERIES,
+                                            streamUrl = "",
+                                            logoUrl = cover,
+                                            description = plot,
+                                            rating = rating,
+                                            year = releaseDate.take(4),
+                                            quality = "HD",
+                                            genre = genre,
+                                            cast = cast,
+                                            seriesId = sId,
+                                            isLive = false,
+                                            xtreamServerUrl = cleanServer,
+                                            xtreamUsername = cleanUser,
+                                            xtreamPassword = cleanPass,
+                                            userAgent = "IPTVSmartersPro"
+                                        )
+                                        if (hideAdult && isAdultMedia(item)) continue
+                                        seriesItems.add(item)
+                                    } catch (_: Exception) {}
+                                }
+                                reader.endArray()
                             }
                         }
                     }
@@ -4466,7 +4583,7 @@ class MediaRepository(private val context: Context) {
 
     suspend fun fetchAllXtreamMoviesFast(): List<MediaItem> = withContext(Dispatchers.IO) {
         val cached = getCachedMoviesList()
-        if (cached.isNotEmpty()) {
+        if (cached.isNotEmpty() && cached.size > 2000) {
             return@withContext cached
         }
         fetchAllXtreamMoviesAndSeries()

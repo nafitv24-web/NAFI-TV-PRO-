@@ -336,20 +336,20 @@ fun NafiTvMainApp(
                             val liveTvM3uUrl = repository.getSavedLiveTvM3uUrl()
                             val tvM3uJob = async {
                                 if (liveTvM3uUrl.isNotBlank()) {
-                                    kotlinx.coroutines.withTimeoutOrNull(4000) {
+                                    kotlinx.coroutines.withTimeoutOrNull(25000) {
                                         try {
                                             repository.parseM3uFromUrl(liveTvM3uUrl).map {
                                                 it.copy(type = MediaType.LIVE_TV, isLive = true)
-                                            }.filterNot { deleted.contains(it.id) }
+                                            }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
                                         } catch (_: Exception) { emptyList() }
                                     } ?: emptyList()
                                 } else emptyList()
                             }
 
                             val xtreamLiveJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(5000) {
+                                kotlinx.coroutines.withTimeoutOrNull(20000) {
                                     try {
-                                        repository.fetchAllXtreamLiveChannels().filterNot { deleted.contains(it.id) }
+                                        repository.fetchAllXtreamLiveChannels().filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
                                     } catch (_: Exception) { emptyList() }
                                 } ?: emptyList()
                             }
@@ -363,7 +363,13 @@ fun NafiTvMainApp(
                             combinedTv.addAll(tvM3u.filterNot { repository.isDemoChannel(it) })
                             combinedTv.addAll(xtreamLiveChannels.filterNot { repository.isDemoChannel(it) })
 
-                            val sourceTvList = if (combinedTv.isNotEmpty()) combinedTv else repository.getDefaultBuiltinLiveTv()
+                            val builtinTv = repository.getDefaultBuiltinLiveTv()
+                            val sourceTvList = if (combinedTv.isNotEmpty()) {
+                                (combinedTv + builtinTv).distinctBy { it.title.trim().lowercase() }
+                            } else {
+                                val currentLoaded = liveTvList.filterNot { repository.isDemoChannel(it) }
+                                if (currentLoaded.isNotEmpty()) currentLoaded else builtinTv
+                            }
                             val seenTvIds = HashSet<String>()
                             val updatedTv = sourceTvList.filterNot { repository.isDemoChannel(it) }.mapIndexed { idx, ch ->
                                 var uid = ch.id.ifBlank { "tv_${idx}_${Math.abs(ch.title.hashCode())}" }
@@ -410,7 +416,7 @@ fun NafiTvMainApp(
                             }
 
                             val xtreamMoviesJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(20000) {
+                                kotlinx.coroutines.withTimeoutOrNull(45000) {
                                     try {
                                         repository.fetchAllXtreamMoviesFast().filterNot { deleted.contains(it.id) }
                                     } catch (_: Exception) { emptyList() }
@@ -420,7 +426,7 @@ fun NafiTvMainApp(
                             val moviesM3uUrl = repository.getSavedMoviesM3uUrl()
                             val moviesM3uJob = async {
                                 if (moviesM3uUrl.isNotBlank()) {
-                                    kotlinx.coroutines.withTimeoutOrNull(4000) {
+                                    kotlinx.coroutines.withTimeoutOrNull(25000) {
                                         try {
                                             if (moviesM3uUrl.endsWith(".json", ignoreCase = true) || moviesM3uUrl.contains("movies.json", ignoreCase = true)) {
                                                 repository.fetchMoviesFromJsonUrl(moviesM3uUrl).map {
@@ -445,7 +451,7 @@ fun NafiTvMainApp(
                             }
 
                             val mixMoviesJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(3500) {
+                                kotlinx.coroutines.withTimeoutOrNull(20000) {
                                     try {
                                         repository.parseM3uFromUrl(MediaRepository.DEFAULT_MIX_MOVIES_M3U_URL).map {
                                             it.copy(
