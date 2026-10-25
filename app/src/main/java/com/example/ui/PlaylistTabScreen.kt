@@ -1,5 +1,6 @@
 package com.example.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -94,15 +95,25 @@ fun PlaylistTabScreen(
     onSelectMedia: (MediaItem, List<MediaItem>) -> Unit,
     onPlaylistsChanged: () -> Unit
 ) {
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedPlaylist by remember { mutableStateOf<PlaylistInfo?>(null) }
     var playlistChannels by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var channelSearchQuery by remember { mutableStateOf("") }
+    var channelSearchQuery by rememberSaveable { mutableStateOf("") }
     var isLoadingChannels by remember { mutableStateOf(false) }
     var showOnlyActive by rememberSaveable { mutableStateOf(false) }
     var activeSeriesForDialog by remember { mutableStateOf<MediaItem?>(null) }
-    var selectedPlaylistTypeFilter by remember { mutableStateOf("ALL") }
-    var selectedPlaylistCategory by remember { mutableStateOf("All") }
+    var selectedPlaylistTypeFilter by rememberSaveable { mutableStateOf("ALL") }
+    var selectedPlaylistCategory by rememberSaveable { mutableStateOf("All") }
+
+    // BackHandler: Close series dialog if open
+    BackHandler(enabled = activeSeriesForDialog != null) {
+        activeSeriesForDialog = null
+    }
+
+    // BackHandler: If browsing an opened playlist, back press returns to playlists list
+    BackHandler(enabled = selectedPlaylist != null && activeSeriesForDialog == null) {
+        selectedPlaylist = null
+    }
 
     val statusTick by ChannelStatusManager.statusUpdateTick.collectAsState()
 

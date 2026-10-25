@@ -92,10 +92,11 @@ fun LiveTvTabScreen(
     onToggleFavorite: (String) -> Unit,
     onAddChannel: (MediaItem) -> Unit = {}
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("ALL") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf("ALL") }
     var showOnlyActive by rememberSaveable { mutableStateOf(false) }
 
+    val context = LocalContext.current
     val statusTick by ChannelStatusManager.statusUpdateTick.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     val firstChannelFocusRequester = remember { FocusRequester() }
@@ -335,7 +336,9 @@ fun LiveTvTabScreen(
                 }
             }
         } else {
+            val gridState = rememberLazyGridState()
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(minSize = 130.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -388,7 +391,6 @@ fun LiveTvTabScreen(
                                 verticalArrangement = Arrangement.Center
                             ) {
                                 if (!channel.logoUrl.isNullOrBlank()) {
-                                    val context = LocalContext.current
                                     AsyncImage(
                                         model = coil.request.ImageRequest.Builder(context)
                                             .data(channel.logoUrl)

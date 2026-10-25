@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -153,7 +154,8 @@ fun NafiTvMainApp(
     val repository = remember { MediaRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    var currentTab by remember { mutableStateOf(AppTab.LIVE_TV) }
+    var currentTab by rememberSaveable { mutableStateOf(AppTab.LIVE_TV) }
+    val tabSaveableStateHolder = rememberSaveableStateHolder()
     var selectedMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var activePlaybackPlaylist by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val initialSavedMode = remember {
@@ -280,6 +282,9 @@ fun NafiTvMainApp(
     var adminPlaylistsList by remember { mutableStateOf(repository.getInitialPlaylists() + repository.getAdminPlaylists()) }
     var customList by remember { mutableStateOf(repository.getCustomStreams()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    val allLiveChannels = remember(liveTvList, customList, m3uList) {
+        liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
+    }
     var favoriteIds by remember { mutableStateOf(repository.getFavoriteIds()) }
     var breakingNewsText by remember { mutableStateOf(repository.getMarqueeTickerText()) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -1129,43 +1134,42 @@ fun NafiTvMainApp(
                             .fillMaxSize()
                             .weight(1f)
                     ) {
-                        when (currentTab) {
-                            AppTab.EVENTS -> EventsScreen(
-                                sports = sportsList.distinctBy { it.id },
-                                favoriteIds = favoriteIds,
-                                isLoading = isRefreshing,
-                                isTvMode = isTvMode,
-                                onSelectMedia = {
-                                    selectedMediaItem = it
-                                    activePlaybackPlaylist = sportsList.distinctBy { sp -> sp.id }
-                                },
-                                onToggleFavorite = { id ->
-                                    repository.toggleFavorite(id)
-                                    favoriteIds = repository.getFavoriteIds()
-                                }
-                            )
-
-                            AppTab.LIVE_TV -> {
-                                LiveTvTabScreen(
-                                    channels = remember(liveTvList, customList, m3uList) {
-                                        liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
-                                    },
+                        tabSaveableStateHolder.SaveableStateProvider(currentTab.name) {
+                            when (currentTab) {
+                                AppTab.EVENTS -> EventsScreen(
+                                    sports = sportsList.distinctBy { it.id },
                                     favoriteIds = favoriteIds,
                                     isLoading = isRefreshing,
                                     isTvMode = isTvMode,
-                                    isAdultHidden = isAdultHidden,
-                                    repository = repository,
-                                    onSelectMedia = { item, playlist ->
-                                        selectedMediaItem = item
-                                        activePlaybackPlaylist = playlist
+                                    onSelectMedia = {
+                                        selectedMediaItem = it
+                                        activePlaybackPlaylist = sportsList.distinctBy { sp -> sp.id }
                                     },
                                     onToggleFavorite = { id ->
                                         repository.toggleFavorite(id)
                                         favoriteIds = repository.getFavoriteIds()
-                                    },
-                                    onAddChannel = handleAddCustomMedia
+                                    }
                                 )
-                            }
+
+                                AppTab.LIVE_TV -> {
+                                    LiveTvTabScreen(
+                                        channels = allLiveChannels,
+                                        favoriteIds = favoriteIds,
+                                        isLoading = isRefreshing,
+                                        isTvMode = isTvMode,
+                                        isAdultHidden = isAdultHidden,
+                                        repository = repository,
+                                        onSelectMedia = { item, playlist ->
+                                            selectedMediaItem = item
+                                            activePlaybackPlaylist = playlist
+                                        },
+                                        onToggleFavorite = { id ->
+                                            repository.toggleFavorite(id)
+                                            favoriteIds = repository.getFavoriteIds()
+                                        },
+                                        onAddChannel = handleAddCustomMedia
+                                    )
+                                }
 
                             AppTab.MOVIES -> MoviesTabScreen(
                                 movies = moviesList,
@@ -1299,6 +1303,7 @@ fun NafiTvMainApp(
                             )
                         }
                     }
+                }
 
                     // TV Non-Intrusive Banner Ad (Zero disturbance, collapsible, hidden during video play)
                     NonIntrusiveAdMobBanner(isTvMode = true)
@@ -1588,43 +1593,42 @@ fun NafiTvMainApp(
                         .fillMaxSize()
                         .padding(paddingValues)
                 ) {
-                    when (currentTab) {
-                        AppTab.EVENTS -> EventsScreen(
-                            sports = sportsList.distinctBy { it.id },
-                            favoriteIds = favoriteIds,
-                            isLoading = isRefreshing,
-                            isTvMode = isTvMode,
-                            onSelectMedia = {
-                                selectedMediaItem = it
-                                activePlaybackPlaylist = sportsList.distinctBy { sp -> sp.id }
-                            },
-                            onToggleFavorite = { id ->
-                                repository.toggleFavorite(id)
-                                favoriteIds = repository.getFavoriteIds()
-                            }
-                        )
-
-                        AppTab.LIVE_TV -> {
-                            LiveTvTabScreen(
-                                channels = remember(liveTvList, customList, m3uList) {
-                                    liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
-                                },
+                    tabSaveableStateHolder.SaveableStateProvider(currentTab.name) {
+                        when (currentTab) {
+                            AppTab.EVENTS -> EventsScreen(
+                                sports = sportsList.distinctBy { it.id },
                                 favoriteIds = favoriteIds,
                                 isLoading = isRefreshing,
                                 isTvMode = isTvMode,
-                                isAdultHidden = isAdultHidden,
-                                repository = repository,
-                                onSelectMedia = { item, playlist ->
-                                    selectedMediaItem = item
-                                    activePlaybackPlaylist = playlist
+                                onSelectMedia = {
+                                    selectedMediaItem = it
+                                    activePlaybackPlaylist = sportsList.distinctBy { sp -> sp.id }
                                 },
                                 onToggleFavorite = { id ->
                                     repository.toggleFavorite(id)
                                     favoriteIds = repository.getFavoriteIds()
-                                },
-                                onAddChannel = handleAddCustomMedia
+                                }
                             )
-                        }
+
+                            AppTab.LIVE_TV -> {
+                                LiveTvTabScreen(
+                                    channels = allLiveChannels,
+                                    favoriteIds = favoriteIds,
+                                    isLoading = isRefreshing,
+                                    isTvMode = isTvMode,
+                                    isAdultHidden = isAdultHidden,
+                                    repository = repository,
+                                    onSelectMedia = { item, playlist ->
+                                        selectedMediaItem = item
+                                        activePlaybackPlaylist = playlist
+                                    },
+                                    onToggleFavorite = { id ->
+                                        repository.toggleFavorite(id)
+                                        favoriteIds = repository.getFavoriteIds()
+                                    },
+                                    onAddChannel = handleAddCustomMedia
+                                )
+                            }
 
                         AppTab.MOVIES -> MoviesTabScreen(
                             movies = moviesList,
@@ -1758,6 +1762,7 @@ fun NafiTvMainApp(
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -3425,9 +3430,9 @@ fun EventsScreen(
     onSelectMedia: (MediaItem) -> Unit,
     onToggleFavorite: (String) -> Unit
 ) {
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("All") }
-    var selectedStatus by remember { mutableStateOf("All") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf("All") }
+    var selectedStatus by rememberSaveable { mutableStateOf("All") }
 
     // Dynamic categories extracted from all sports matches
     val categories = remember(sports) {

@@ -153,7 +153,7 @@ fun MoviesTabScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf("All") }
     var selectedTypeFilter by rememberSaveable { mutableStateOf("ALL") }
     var isGridViewActive by rememberSaveable { mutableStateOf(false) }
@@ -312,8 +312,19 @@ fun MoviesTabScreen(
         if (activeHubId.isNotBlank()) adminHubs.firstOrNull { it.id == activeHubId } else null
     }
 
+    // BackHandler: If inside details dialog or series episodes dialog, back press closes it immediately
+    BackHandler(enabled = selectedSeriesForDialog != null || selectedMovieForDetails != null) {
+        selectedSeriesForDialog = null
+        selectedMovieForDetails = null
+    }
+
+    // BackHandler: If inside full grid view, back press returns to home carousels view
+    BackHandler(enabled = isGridViewActive && selectedSeriesForDialog == null && selectedMovieForDetails == null) {
+        isGridViewActive = false
+    }
+
     // BackHandler: If inside a selected server, back press pops back to All Movies showcase
-    BackHandler(enabled = activeHubId.isNotBlank()) {
+    BackHandler(enabled = activeHubId.isNotBlank() && selectedSeriesForDialog == null && selectedMovieForDetails == null && !isGridViewActive) {
         activeHubId = ""
         repository?.setLastSelectedMovieHubId("")
         selectedCategory = "All"
