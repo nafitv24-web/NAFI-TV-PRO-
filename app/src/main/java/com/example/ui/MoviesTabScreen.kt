@@ -64,6 +64,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -153,37 +154,24 @@ fun MoviesTabScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("All") }
-    var selectedTypeFilter by remember { mutableStateOf("ALL") }
-    var isGridViewActive by remember { mutableStateOf(false) }
+    var selectedCategory by rememberSaveable { mutableStateOf("All") }
+    var selectedTypeFilter by rememberSaveable { mutableStateOf("ALL") }
+    var isGridViewActive by rememberSaveable { mutableStateOf(false) }
 
     // Dialog state
     var selectedSeriesForDialog by remember { mutableStateOf<MediaItem?>(null) }
     var selectedMovieForDetails by remember { mutableStateOf<MediaItem?>(null) }
 
-    // Active Selected Server or OTT Platform Hub
-    var selectedHub by remember { mutableStateOf<MovieHubItem?>(null) }
+    // Active Selected Server or OTT Platform Hub (persisted across navigation & app restarts)
+    var activeHubId by rememberSaveable {
+        mutableStateOf(repository?.getLastSelectedMovieHubId() ?: "")
+    }
     var isHubLoading by remember { mutableStateOf(false) }
     val hubMoviesCache = remember { mutableStateMapOf<String, List<MediaItem>>() }
     var hubsRefreshTrigger by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         hubsRefreshTrigger++
-    }
-
-    // BackHandler: If inside a selected server, back press pops back to All Movies showcase
-    BackHandler(enabled = selectedHub != null) {
-        selectedHub = null
-        selectedCategory = "All"
-        searchQuery = ""
-    }
-
-    val handleItemSelect: (MediaItem) -> Unit = { item ->
-        if ((item.isSeries || item.type == MediaType.SERIES) && repository != null) {
-            selectedSeriesForDialog = item
-        } else {
-            onSelectMedia(item)
-        }
     }
 
     // Build the list of Admin-added Xtream Servers, Playlists, and OTT Platforms
@@ -320,11 +308,42 @@ fun MoviesTabScreen(
         hubs.distinctBy { it.id }
     }
 
+    val selectedHub = remember(activeHubId, adminHubs) {
+        if (activeHubId.isNotBlank()) adminHubs.firstOrNull { it.id == activeHubId } else null
+    }
+
+    // BackHandler: If inside a selected server, back press pops back to All Movies showcase
+    BackHandler(enabled = activeHubId.isNotBlank()) {
+        activeHubId = ""
+        repository?.setLastSelectedMovieHubId("")
+        selectedCategory = "All"
+        searchQuery = ""
+    }
+
     // Load Hub Movies on-demand when user clicks an Xtream Server, Playlist, or OTT Platform Hub
-    LaunchedEffect(selectedHub) {
+    LaunchedEffect(selectedHub?.id) {
         val hub = selectedHub ?: return@LaunchedEffect
         val curCached = hubMoviesCache[hub.id]
-        if ((curCached == null || curCached.size <= 1000) && repository != null) {
+        if (curCached != null && curCached.isNotEmpty()) {
+            isHubLoading = false
+            return@LaunchedEffect
+        }
+        if (repository != null) {
+            val diskCached = when (hub.hubCategory) {
+                HubCategory.XTREAM -> repository.getCachedXtreamAccountMovies(hub.id)
+                HubCategory.PLAYLIST -> repository.getCachedPlaylistMovies(hub.id)
+                else -> emptyList()
+            }
+            if (diskCached.isNotEmpty()) {
+                val strictlyPure = diskCached.filter { isPureMovieOrSeries(it) }
+                if (strictlyPure.isNotEmpty()) {
+                    hubMoviesCache[hub.id] = strictlyPure
+                    isHubLoading = false
+                    return@LaunchedEffect
+                }
+            }
+        }
+        if (repository != null) {
             isHubLoading = true
             withContext(Dispatchers.IO) {
                 try {
@@ -424,13 +443,10 @@ fun MoviesTabScreen(
     // The active source of movies: either the selected Hub's movies, or the general movies list
     val currentActiveSourceMovies = remember(selectedHub, hubMoviesCache.toMap(), movies, repository) {
         val rawList = if (selectedHub != null) {
-            val fromMem = hubMoviesCache[selectedHub!!.id]
-            val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub!!.id) ?: emptyList()
-            val fromPl = repository?.getCachedPlaylistMovies(selectedHub!!.id) ?: emptyList()
+            val fromMem = hubMoviesCache[selectedHub.id]
+            val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub.id) ?: emptyList()
+            val fromPl = repository?.getCachedPlaylistMovies(selectedHub.id) ?: emptyList()
             when {
-                fromMem != null && fromMem.size > 2000 -> fromMem
-                fromXtream.size > 2000 -> fromXtream
-                fromPl.size > 2000 -> fromPl
                 fromMem != null && fromMem.isNotEmpty() -> fromMem
                 fromXtream.isNotEmpty() -> fromXtream
                 fromPl.isNotEmpty() -> fromPl
@@ -446,6 +462,18 @@ fun MoviesTabScreen(
             val isSer = it.isSeries || it.type == MediaType.SERIES || it.streamUrl.contains("/series/")
             if (isSer) it.copy(type = MediaType.SERIES, isLive = false) else it.copy(type = MediaType.MOVIE, isLive = false)
         }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
+    }
+
+    val handleItemSelect: (MediaItem) -> Unit = { item ->
+        if ((item.isSeries || item.type == MediaType.SERIES) && repository != null) {
+            selectedSeriesForDialog = item
+        } else {
+            if (onSelectMediaWithPlaylist != null) {
+                onSelectMediaWithPlaylist(item, currentActiveSourceMovies)
+            } else {
+                onSelectMedia(item)
+            }
+        }
     }
 
     // Filter adult content and type (Movie / Series)
@@ -684,7 +712,7 @@ fun MoviesTabScreen(
                 ) {
                     // "সব" (All Platforms) circular icon
                     item(key = "all_ott_platforms") {
-                        val isAllSelected = selectedHub == null
+                        val isAllSelected = activeHubId.isBlank()
                         OttCircularBrandIcon(
                             title = "সকল",
                             logoUrl = null,
@@ -693,7 +721,8 @@ fun MoviesTabScreen(
                             isTvMode = isTvMode,
                             isAllIcon = true,
                             onClick = {
-                                selectedHub = null
+                                activeHubId = ""
+                                repository?.setLastSelectedMovieHubId("")
                                 selectedCategory = "All"
                             }
                         )
@@ -701,7 +730,7 @@ fun MoviesTabScreen(
 
                     // Dynamic OTT Platforms & Movie Servers (Only Admin Configured)
                     items(adminHubs, key = { it.id }) { hub ->
-                        val isSelected = selectedHub?.id == hub.id
+                        val isSelected = activeHubId == hub.id
                         OttCircularBrandIcon(
                             title = hub.title,
                             logoUrl = hub.logoUrl,
@@ -710,7 +739,9 @@ fun MoviesTabScreen(
                             isTvMode = isTvMode,
                             isAllIcon = false,
                             onClick = {
-                                selectedHub = if (selectedHub?.id == hub.id) null else hub
+                                val newId = if (activeHubId == hub.id) "" else hub.id
+                                activeHubId = newId
+                                repository?.setLastSelectedMovieHubId(newId)
                                 selectedCategory = "All"
                             }
                         )
@@ -835,7 +866,8 @@ fun MoviesTabScreen(
                             // Back to all hubs button
                             Button(
                                 onClick = {
-                                    selectedHub = null
+                                    activeHubId = ""
+                                    repository?.setLastSelectedMovieHubId("")
                                     selectedCategory = "All"
                                 },
                                 shape = RoundedCornerShape(8.dp),
@@ -989,7 +1021,10 @@ fun MoviesTabScreen(
                         textAlign = TextAlign.Center
                     )
                     Button(
-                        onClick = { selectedHub = null },
+                        onClick = {
+                            activeHubId = ""
+                            repository?.setLastSelectedMovieHubId("")
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -1365,7 +1400,12 @@ fun MoviesTabScreen(
                 onDismiss = { selectedSeriesForDialog = null },
                 onPlayEpisode = { episodeItem ->
                     selectedSeriesForDialog = null
-                    onSelectMedia(episodeItem)
+                    val episodeList = seriesItem.episodes.map { it.toMediaItem(seriesItem) }.ifEmpty { listOf(episodeItem) }
+                    if (onSelectMediaWithPlaylist != null) {
+                        onSelectMediaWithPlaylist(episodeItem, episodeList)
+                    } else {
+                        onSelectMedia(episodeItem)
+                    }
                 }
             )
         }
@@ -1380,7 +1420,11 @@ fun MoviesTabScreen(
             onDismiss = { selectedMovieForDetails = null },
             onPlayOnline = { mediaToPlay, _ ->
                 selectedMovieForDetails = null
-                onSelectMedia(mediaToPlay)
+                if (onSelectMediaWithPlaylist != null) {
+                    onSelectMediaWithPlaylist(mediaToPlay, currentActiveSourceMovies)
+                } else {
+                    onSelectMedia(mediaToPlay)
+                }
             },
             onPlayOffline = { mediaToPlay ->
                 selectedMovieForDetails = null

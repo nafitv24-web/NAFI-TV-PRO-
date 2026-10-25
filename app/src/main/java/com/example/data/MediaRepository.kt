@@ -563,15 +563,19 @@ class MediaRepository(private val context: Context) {
 
     fun getCachedMoviesList(): List<MediaItem> {
         val disk = loadListFromFileCache("cache_movies_v2.json").filterNot { isDemoChannel(it) }
-        if (disk.size > 2000) return disk
+        val allHubMovies = getAllCachedPlaylistAndXtreamMovies()
+        if (allHubMovies.isNotEmpty()) {
+            return (allHubMovies + disk).distinctBy { it.id }
+        }
+        if (disk.isNotEmpty()) return disk
         val xtreamCached = loadListFromFileCache("cache_xtream_mov_default_rgkkw.json").filterNot { isDemoChannel(it) }
-        if (xtreamCached.size > 2000) return xtreamCached
+        if (xtreamCached.isNotEmpty()) return xtreamCached
         val plCached = loadListFromFileCache("cache_pl_mov_pl_starshare_premium.json").filterNot { isDemoChannel(it) }
-        if (plCached.size > 2000) return plCached
+        if (plCached.isNotEmpty()) return plCached
         val plMovies = getCachedPlaylistMovies("pl_starshare_premium")
-        if (plMovies.size > 2000) return plMovies
+        if (plMovies.isNotEmpty()) return plMovies
         val xtreamFull = getCachedXtreamAccountMovies("default_rgkkw")
-        if (xtreamFull.size > 2000) return xtreamFull
+        if (xtreamFull.isNotEmpty()) return xtreamFull
         return disk.ifEmpty { xtreamCached.ifEmpty { plCached.ifEmpty { plMovies } } }
     }
 
@@ -806,8 +810,9 @@ class MediaRepository(private val context: Context) {
     fun getInitialMoviesSeries(): List<MediaItem> {
         val customMov = getCustomStreams().filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
         val cached = getCachedMoviesList().filterNot { isItemDeleted(it) || isDemoChannel(it) }
+        val allHubMovies = getAllCachedPlaylistAndXtreamMovies()
         val baseList = if (cached.isNotEmpty()) cached else getDefaultBuiltinMovies()
-        return (customMov + baseList).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }.sortedByDescending { it.movieSortWeight }
+        return (allHubMovies + customMov + baseList).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }.sortedByDescending { it.movieSortWeight }
     }
 
     // In-memory cache for custom streams to avoid repeated SharedPreferences JSON parsing
@@ -3449,12 +3454,20 @@ class MediaRepository(private val context: Context) {
 
     fun getAllCachedPlaylistAndXtreamMovies(): List<MediaItem> {
         val result = mutableListOf<MediaItem>()
-        val allPl = (getAdminPlaylists() + getUserPlaylists()).filter { it.isMovieOnly || it.isMoviePlaylist }
+        val allPl = (getAdminPlaylists() + getUserPlaylists()).filter {
+            it.isMovieOnly || it.isMoviePlaylist || it.type.equals("MOVIE", ignoreCase = true) ||
+            it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
+            (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+        }.distinctBy { it.id }
         for (pl in allPl) {
             val cached = getCachedPlaylistMovies(pl.id)
             if (cached.isNotEmpty()) {
                 result.addAll(cached)
             }
+        }
+        val savedMoviesM3uCached = getCachedPlaylistMovies("saved_movies_m3u")
+        if (savedMoviesM3uCached.isNotEmpty()) {
+            result.addAll(savedMoviesM3uCached)
         }
         for (acc in getXtreamAccounts()) {
             val cached = getCachedXtreamAccountMovies(acc.id)
@@ -3765,7 +3778,7 @@ class MediaRepository(private val context: Context) {
 
             if (matchesHost && matchesUser) {
                 val plMovies = getCachedPlaylistMovies(pl.id)
-                if (plMovies.size > 2000) {
+                if (plMovies.isNotEmpty()) {
                     return plMovies
                 }
                 val plChannels = getCachedPlaylistChannels(pl.id)
@@ -3776,7 +3789,7 @@ class MediaRepository(private val context: Context) {
                         if (it.type != MediaType.SERIES && !it.isSeries) it.copy(type = MediaType.MOVIE, isLive = false) else it.copy(isLive = false)
                     }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
 
-                    if (movies.size > 2000) {
+                    if (movies.isNotEmpty()) {
                         saveCachedPlaylistMovies(pl.id, movies)
                         return movies
                     }
@@ -3787,7 +3800,7 @@ class MediaRepository(private val context: Context) {
         // Direct check for Starshare premium playlist cache
         if (cleanHost.contains("rgkkw", ignoreCase = true) || cleanServer.contains("rgkkw", ignoreCase = true)) {
             val starshareMovies = getCachedPlaylistMovies("pl_starshare_premium")
-            if (starshareMovies.size > 2000) {
+            if (starshareMovies.isNotEmpty()) {
                 return starshareMovies
             }
             val starshareChannels = getCachedPlaylistChannels("pl_starshare_premium")
@@ -3798,7 +3811,7 @@ class MediaRepository(private val context: Context) {
                     if (it.type != MediaType.SERIES && !it.isSeries) it.copy(type = MediaType.MOVIE, isLive = false) else it.copy(isLive = false)
                 }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
 
-                if (movies.size > 2000) {
+                if (movies.isNotEmpty()) {
                     saveCachedPlaylistMovies("pl_starshare_premium", movies)
                     return movies
                 }
@@ -3810,12 +3823,12 @@ class MediaRepository(private val context: Context) {
 
     fun getCachedXtreamAccountMovies(accId: String): List<MediaItem> {
         val disk = loadListFromFileCache("cache_xtream_mov_${accId}.json")
-        if (disk.size > 2000) return disk
+        if (disk.isNotEmpty()) return disk
 
         // High priority: Check if Starshare or matching playlist has the full 27,616 items
         if (accId == "default_rgkkw" || accId == "pl_starshare_premium" || accId.contains("rgkkw")) {
             val plMovies = getCachedPlaylistMovies("pl_starshare_premium")
-            if (plMovies.size > 2000) {
+            if (plMovies.isNotEmpty()) {
                 saveCachedXtreamAccountMovies(accId, plMovies)
                 return plMovies
             }
@@ -3827,7 +3840,7 @@ class MediaRepository(private val context: Context) {
                     val isSer = it.isSeries || it.type == MediaType.SERIES || it.streamUrl.contains("/series/")
                     if (isSer) it.copy(type = MediaType.SERIES, isLive = false) else it.copy(type = MediaType.MOVIE, isLive = false)
                 }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
-                if (extracted.size > 2000 || (disk.isEmpty() && extracted.isNotEmpty())) {
+                if (extracted.isNotEmpty()) {
                     saveCachedXtreamAccountMovies(accId, extracted)
                     saveCachedPlaylistMovies("pl_starshare_premium", extracted)
                     return extracted
@@ -4007,7 +4020,7 @@ class MediaRepository(private val context: Context) {
         forceRefresh: Boolean = false
     ): List<MediaItem> = withContext(Dispatchers.IO) {
         val cached = getCachedXtreamAccountMovies(account.id)
-        if (!forceRefresh && cached.size > 2000) {
+        if (!forceRefresh && cached.isNotEmpty()) {
             return@withContext cached
         }
 
@@ -4025,7 +4038,7 @@ class MediaRepository(private val context: Context) {
         // 1. Fast match from cached playlists (Starshare has 20,048 movies + 7,568 series = 27,616 VOD items)
         if (!forceRefresh) {
             val matchingPlMovies = findMatchingPlaylistMovies(cleanServer, cleanUser)
-            if (matchingPlMovies != null && matchingPlMovies.size > 2000) {
+            if (matchingPlMovies != null && matchingPlMovies.isNotEmpty()) {
                 saveCachedXtreamAccountMovies(account.id, matchingPlMovies)
                 return@withContext matchingPlMovies
             }
@@ -4315,7 +4328,7 @@ class MediaRepository(private val context: Context) {
 
     fun getCachedPlaylistMovies(playlistId: String): List<MediaItem> {
         val disk = loadListFromFileCache("cache_pl_mov_${playlistId}.json")
-        if (disk.size > 2000) return disk
+        if (disk.isNotEmpty()) return disk
 
         // High priority: Check if playlist's own channel cache exists
         val plChannels = getCachedPlaylistChannels(playlistId)
@@ -4371,7 +4384,7 @@ class MediaRepository(private val context: Context) {
         forceRefresh: Boolean = false
     ): List<MediaItem> = withContext(Dispatchers.IO) {
         val cached = getCachedPlaylistMovies(playlist.id)
-        if (!forceRefresh && cached.size > 2000) {
+        if (!forceRefresh && cached.isNotEmpty()) {
             return@withContext cached
         }
 
@@ -5895,6 +5908,14 @@ class MediaRepository(private val context: Context) {
             return DEFAULT_MOVIES_JSON_URL
         }
         return stored
+    }
+
+    fun getLastSelectedMovieHubId(): String {
+        return prefs.getString("last_selected_movie_hub_id", "") ?: ""
+    }
+
+    fun setLastSelectedMovieHubId(hubId: String) {
+        prefs.edit().putString("last_selected_movie_hub_id", hubId).apply()
     }
 
     // Push remote configuration (Live TV M3U, Sports M3U, Movies M3U, Sports/Tapmad JSON API) to Firebase RTDB and Firestore
