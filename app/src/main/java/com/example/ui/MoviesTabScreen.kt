@@ -440,28 +440,42 @@ fun MoviesTabScreen(
         }
     }
 
-    // The active source of movies: either the selected Hub's movies, or the general movies list
-    val currentActiveSourceMovies = remember(selectedHub, hubMoviesCache.toMap(), movies, repository) {
-        val rawList = if (selectedHub != null) {
-            val fromMem = hubMoviesCache[selectedHub.id]
-            val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub.id) ?: emptyList()
-            val fromPl = repository?.getCachedPlaylistMovies(selectedHub.id) ?: emptyList()
-            when {
-                fromMem != null && fromMem.isNotEmpty() -> fromMem
-                fromXtream.isNotEmpty() -> fromXtream
-                fromPl.isNotEmpty() -> fromPl
-                else -> emptyList()
+    // 1. Instant Active Source Movies: initialized immediately so frame 0 is NEVER empty
+    var activeSourceMovies by remember {
+        mutableStateOf(
+            if (movies.isNotEmpty()) movies.take(1500)
+            else repository?.getDefaultBuiltinMovies() ?: emptyList()
+        )
+    }
+
+    // 2. Background computation of full activeSourceMovies (Runs on Dispatchers.Default - NEVER freezes UI)
+    LaunchedEffect(selectedHub?.id, hubMoviesCache.toMap(), movies.size, repository) {
+        withContext(Dispatchers.Default) {
+            val rawList = if (selectedHub != null) {
+                val fromMem = hubMoviesCache[selectedHub.id]
+                val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub.id) ?: emptyList()
+                val fromPl = repository?.getCachedPlaylistMovies(selectedHub.id) ?: emptyList()
+                when {
+                    !fromMem.isNullOrEmpty() -> fromMem
+                    fromXtream.isNotEmpty() -> fromXtream
+                    fromPl.isNotEmpty() -> fromPl
+                    else -> emptyList()
+                }
+            } else {
+                val base = if (movies.isNotEmpty()) movies else repository?.getDefaultBuiltinMovies() ?: emptyList()
+                val allConfigured = repository?.getAllCachedPlaylistAndXtreamMovies() ?: emptyList()
+                (allConfigured + base)
             }
-        } else {
-            val base = if (movies.isNotEmpty()) movies else repository?.getInitialMoviesSeries() ?: repository?.getDefaultBuiltinMovies() ?: emptyList()
-            val allConfigured = repository?.getAllCachedPlaylistAndXtreamMovies() ?: emptyList()
-            (allConfigured + base).distinctBy { it.id }
+            val filtered = rawList.asSequence()
+                .filter { isPureMovieOrSeries(it) }
+                .distinctBy { it.id }
+                .sortedByDescending { it.movieSortWeight }
+                .toList()
+
+            withContext(Dispatchers.Main) {
+                activeSourceMovies = if (filtered.isNotEmpty()) filtered else repository?.getDefaultBuiltinMovies() ?: emptyList()
+            }
         }
-        // STRICT FILTER: Absolutely NO Live TV!
-        rawList.filter { isPureMovieOrSeries(it) }.map {
-            val isSer = it.isSeries || it.type == MediaType.SERIES || it.streamUrl.contains("/series/")
-            if (isSer) it.copy(type = MediaType.SERIES, isLive = false) else it.copy(type = MediaType.MOVIE, isLive = false)
-        }.distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
     }
 
     val handleItemSelect: (MediaItem) -> Unit = { item ->
@@ -469,16 +483,17 @@ fun MoviesTabScreen(
             selectedSeriesForDialog = item
         } else {
             if (onSelectMediaWithPlaylist != null) {
-                onSelectMediaWithPlaylist(item, currentActiveSourceMovies)
+                onSelectMediaWithPlaylist(item, activeSourceMovies)
             } else {
                 onSelectMedia(item)
             }
         }
     }
 
-    // Filter adult content and type (Movie / Series)
-    var preparedMovies by remember { mutableStateOf(currentActiveSourceMovies) }
+    // Prepared state variables
+    var preparedMovies by remember { mutableStateOf(activeSourceMovies) }
     var preparedCategorizedMovies by remember { mutableStateOf<List<Pair<String, List<MediaItem>>>>(emptyList()) }
+    var preparedFullCategorizedMap by remember { mutableStateOf<Map<String, List<MediaItem>>>(emptyMap()) }
     var preparedCategories by remember { mutableStateOf<List<String>>(listOf("All", "ডাউনলোডসমূহ")) }
     var preparedFeaturedMovies by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
 
@@ -491,13 +506,14 @@ fun MoviesTabScreen(
         )
     }
 
-    LaunchedEffect(currentActiveSourceMovies, isAdultHidden, selectedTypeFilter, repository) {
+    // 3. Category grouping, adult filtering and shelf preparation on background thread
+    LaunchedEffect(activeSourceMovies, isAdultHidden, selectedTypeFilter, repository) {
         withContext(Dispatchers.Default) {
             val shouldFilterAdult = isAdultHidden || (repository?.isAdultContentHidden() == true)
             val adultFiltered = if (shouldFilterAdult && repository != null) {
                 val hiddenIds = repository.getHiddenItemIds()
                 val hiddenKeywords = repository.getHiddenKeywords().map { it.lowercase() }
-                currentActiveSourceMovies.filterNot { m ->
+                activeSourceMovies.filterNot { m ->
                     if (repository.isAdultCategory(m.category) || repository.isAdultMedia(m) || repository.isMediaHidden(m)) return@filterNot true
                     if (hiddenIds.contains(m.id)) return@filterNot true
                     if (hiddenKeywords.isNotEmpty()) {
@@ -508,12 +524,12 @@ fun MoviesTabScreen(
                 }
             } else if (shouldFilterAdult) {
                 val adultWords = listOf("adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "porn", "sex", "sensual", "mature", "ullu", "kooku", "primeshots", "rabbit", "besharams", "hotx")
-                currentActiveSourceMovies.filterNot { m ->
+                activeSourceMovies.filterNot { m ->
                     val txt = "${m.title} ${m.category} ${m.genre ?: ""}".lowercase()
                     adultWords.any { txt.contains(it) }
                 }
             } else {
-                currentActiveSourceMovies
+                activeSourceMovies
             }
 
             val typeFiltered = when (selectedTypeFilter) {
@@ -522,7 +538,7 @@ fun MoviesTabScreen(
                 else -> adultFiltered
             }.sortedByDescending { it.movieSortWeight }
 
-            // Group into Categories
+            // Group into Categories efficiently
             val groupedMap = LinkedHashMap<String, MutableList<MediaItem>>()
             for (m in typeFiltered) {
                 val cat = m.category.trim()
@@ -552,10 +568,18 @@ fun MoviesTabScreen(
             val withLogos = typeFiltered.filter { !it.logoUrl.isNullOrBlank() }.sortedByDescending { it.movieSortWeight }
             val featured = if (withLogos.isNotEmpty()) withLogos.take(8) else typeFiltered.take(6)
 
+            // CRITICAL SPEED OPTIMIZATION:
+            // In the home carousels, show top 25 categories and 25 items per shelf!
+            // Full items are always preserved in preparedFullCategorizedMap for search and "সব" grid view.
+            val homeShelves = sortedCatPairs.take(25).map { (catName, items) ->
+                catName to items.take(25)
+            }
+
             withContext(Dispatchers.Main) {
                 preparedMovies = typeFiltered
                 preparedCategories = allCats
-                preparedCategorizedMovies = sortedCatPairs
+                preparedCategorizedMovies = homeShelves
+                preparedFullCategorizedMap = sortedCatPairs.toMap()
                 preparedFeaturedMovies = featured
             }
         }
@@ -568,19 +592,31 @@ fun MoviesTabScreen(
     var debouncedSearchQuery by remember { mutableStateOf("") }
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
-            kotlinx.coroutines.delay(160)
+            kotlinx.coroutines.delay(120)
         }
         debouncedSearchQuery = searchQuery
     }
     var sortOrder by remember { mutableStateOf("NEWEST") }
 
-    // Filtered movies when search query or category filter is active
-    val filteredMovies = remember(preparedMovies, debouncedSearchQuery, selectedCategory, favoriteIds, sortOrder) {
-        if (selectedCategory == "ডাউনলোডসমূহ") {
-            emptyList()
-        } else {
-            val list = preparedMovies.filter { movie ->
-                val query = debouncedSearchQuery.trim()
+    // 4. Background Filtered movies calculation: NEVER freezes during search or category selection
+    var filteredMovies by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(preparedMovies, debouncedSearchQuery, selectedCategory, favoriteIds, sortOrder, preparedFullCategorizedMap) {
+        withContext(Dispatchers.Default) {
+            if (selectedCategory == "ডাউনলোডসমূহ") {
+                withContext(Dispatchers.Main) { filteredMovies = emptyList() }
+                return@withContext
+            }
+
+            val source = if (selectedCategory != "All" && selectedCategory != "❤️ Favorites") {
+                preparedFullCategorizedMap[selectedCategory] ?: preparedMovies.filter {
+                    it.category.trim().equals(selectedCategory.trim(), ignoreCase = true)
+                }
+            } else {
+                preparedMovies
+            }
+
+            val query = debouncedSearchQuery.trim()
+            val filtered = source.asSequence().filter { movie ->
                 val matchesSearch = if (query.isBlank()) true else {
                     movie.title.contains(query, ignoreCase = true) ||
                             movie.category.contains(query, ignoreCase = true) ||
@@ -588,18 +624,21 @@ fun MoviesTabScreen(
                             (movie.cast != null && movie.cast.contains(query, ignoreCase = true)) ||
                             (movie.genre != null && movie.genre.contains(query, ignoreCase = true))
                 }
-                val matchesCategory = when (selectedCategory) {
-                    "All" -> true
-                    "❤️ Favorites" -> favoriteIds.contains(movie.id)
-                    else -> movie.category.trim().equals(selectedCategory.trim(), ignoreCase = true)
-                }
-                matchesSearch && matchesCategory
-            }.distinctBy { it.id }
+                val matchesFav = if (selectedCategory == "❤️ Favorites") favoriteIds.contains(movie.id) else true
+                matchesSearch && matchesFav
+            }.distinctBy { it.id }.toList()
 
-            when (sortOrder) {
-                "RATING" -> list.sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
-                "TITLE" -> list.sortedBy { it.title.lowercase() }
-                else -> list.sortedByDescending { it.movieSortWeight }
+            val sorted = when (sortOrder) {
+                "RATING" -> filtered.sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
+                "TITLE" -> filtered.sortedBy { it.title.lowercase() }
+                else -> filtered.sortedByDescending { it.movieSortWeight }
+            }
+
+            // Limit results to 300 for blazing smooth 120 FPS grid scrolling
+            val clamped = if (sorted.size > 300 && query.isNotBlank()) sorted.take(300) else sorted
+
+            withContext(Dispatchers.Main) {
+                filteredMovies = clamped
             }
         }
     }
@@ -986,12 +1025,16 @@ fun MoviesTabScreen(
         // 6. MAIN CONTENT AREA (Netflix / Disney+ Hotstar UI)
         // -------------------------------------------------------------
         if (isHubLoading) {
-            NafiLogoLoadingView(
-                title = "${selectedHub?.title ?: "সার্ভার"} থেকে মুভি লোড হচ্ছে...",
-                subtitle = "অনুগ্রহ করে অপেক্ষা করুন, হাই-স্পিড VOD ডাটা সিঙ্ক হচ্ছে...",
-                modifier = Modifier.fillMaxSize()
+            androidx.compose.material3.LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp),
+                color = Color(0xFF00E5FF),
+                trackColor = Color(0xFF0F172A)
             )
-        } else if (preparedMovies.isEmpty() && selectedCategory == "All" && searchQuery.isBlank() && !isLoading && selectedHub != null) {
+        }
+
+        if (preparedMovies.isEmpty() && selectedCategory == "All" && searchQuery.isBlank() && !isLoading && selectedHub != null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1009,7 +1052,7 @@ fun MoviesTabScreen(
                         modifier = Modifier.size(54.dp)
                     )
                     Text(
-                        text = "${selectedHub!!.title} এ কোনো মুভি পাওয়া যায়নি",
+                        text = if (isHubLoading) "${selectedHub!!.title} থেকে মুভি লোড হচ্ছে..." else "${selectedHub!!.title} এ কোনো মুভি পাওয়া যায়নি",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp
@@ -1421,7 +1464,7 @@ fun MoviesTabScreen(
             onPlayOnline = { mediaToPlay, _ ->
                 selectedMovieForDetails = null
                 if (onSelectMediaWithPlaylist != null) {
-                    onSelectMediaWithPlaylist(mediaToPlay, currentActiveSourceMovies)
+                    onSelectMediaWithPlaylist(mediaToPlay, activeSourceMovies)
                 } else {
                     onSelectMedia(mediaToPlay)
                 }

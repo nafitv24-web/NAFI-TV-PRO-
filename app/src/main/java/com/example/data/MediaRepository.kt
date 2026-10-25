@@ -913,10 +913,13 @@ class MediaRepository(private val context: Context) {
 
     fun getInitialMoviesSeries(): List<MediaItem> {
         val customMov = getCustomStreams().filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val cached = getCachedMoviesList().filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val allHubMovies = getAllCachedPlaylistAndXtreamMovies()
-        val baseList = if (cached.isNotEmpty()) cached else getDefaultBuiltinMovies()
-        return (allHubMovies + customMov + baseList).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }.sortedByDescending { it.movieSortWeight }
+        val inMem = memoryFileCache["cache_movies_v2.json"]
+        val baseList = if (!inMem.isNullOrEmpty()) {
+            inMem.take(800)
+        } else {
+            getDefaultBuiltinMovies()
+        }
+        return (customMov + baseList).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
     }
 
     // In-memory cache for custom streams to avoid repeated SharedPreferences JSON parsing

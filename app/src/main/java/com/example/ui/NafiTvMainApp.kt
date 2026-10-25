@@ -410,8 +410,9 @@ fun NafiTvMainApp(
                             withContext(Dispatchers.Main) { currentLoadingStage = LoadingStage.MOVIES }
                             val cachedMovies = repository.getCachedMoviesList()
                             if (cachedMovies.isNotEmpty()) {
+                                val merged = (cachedMovies + moviesList).distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
                                 withContext(Dispatchers.Main) {
-                                    moviesList = (cachedMovies + moviesList).distinctBy { it.id }.sortedByDescending { it.movieSortWeight }
+                                    moviesList = merged
                                 }
                             }
 
