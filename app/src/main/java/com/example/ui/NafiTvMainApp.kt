@@ -758,7 +758,9 @@ fun NafiTvMainApp(
                 }
                 sportsList = repository.getInitialSports().filterNot { repository.isItemDeleted(it) }
                 customList = repository.getCustomStreams()
-                refreshAllData()
+                liveTvList = repository.getInitialLiveTv()
+                moviesList = repository.getInitialMoviesSeries()
+                favoriteIds = repository.getFavoriteIds()
             }
         )
     } else {

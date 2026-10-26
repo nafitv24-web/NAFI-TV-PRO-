@@ -6808,11 +6808,23 @@ fun AdminControlAppScreen(
                         Button(
                             onClick = {
                                 if (editPlaylistTitle.isNotBlank() && editPlaylistUrl.isNotBlank()) {
+                                    val cleanUrl = editPlaylistUrl.trim()
+                                    val creds = repository.parseXtreamCredentials(cleanUrl)
+                                    val isMovie = editPlaylistTitle.contains("movie", ignoreCase = true) ||
+                                            cleanUrl.contains("movie", ignoreCase = true) ||
+                                            target.isMovieOnly ||
+                                            target.type.equals("MOVIE", ignoreCase = true)
+
                                     val updatedPl = target.copy(
                                         title = editPlaylistTitle.trim(),
-                                        url = editPlaylistUrl.trim(),
+                                        url = cleanUrl,
                                         logoUrl = editPlaylistLogoUrl.trim().takeIf { it.isNotBlank() },
-                                        description = editPlaylistDescription.trim().takeIf { it.isNotBlank() }
+                                        description = editPlaylistDescription.trim().takeIf { it.isNotBlank() },
+                                        serverUrl = creds?.first ?: if (cleanUrl.contains("://") && !cleanUrl.endsWith(".m3u", ignoreCase = true) && !cleanUrl.endsWith(".m3u8", ignoreCase = true)) cleanUrl else target.serverUrl,
+                                        username = creds?.second ?: target.username,
+                                        password = creds?.third ?: target.password,
+                                        type = if (creds != null) "XTREAM" else if (isMovie) "MOVIE" else target.type,
+                                        isMovieOnly = isMovie
                                     )
 
                                     repository.saveAdminPlaylist(updatedPl)

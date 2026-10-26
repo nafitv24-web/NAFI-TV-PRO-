@@ -972,6 +972,18 @@ class MediaRepository(private val context: Context) {
             sports.removeAll { it.id == item.id }
             sports.add(0, item.copy(isAdminAdded = true))
             saveCachedSportsMatches(sports)
+        } else if (item.type == MediaType.LIVE_TV) {
+            val liveTv = getCachedLiveTvChannels().toMutableList()
+            liveTv.removeAll { it.id == item.id }
+            liveTv.add(0, item)
+            saveCachedLiveTvChannels(liveTv)
+            cachedBuiltinLiveTv = null
+        } else if (item.type == MediaType.MOVIE || item.type == MediaType.SERIES) {
+            val movies = getCachedMoviesList().toMutableList()
+            movies.removeAll { it.id == item.id }
+            movies.add(0, item)
+            saveCachedMoviesList(movies)
+            cachedBuiltinMovies = null
         }
     }
 
@@ -993,6 +1005,14 @@ class MediaRepository(private val context: Context) {
         saveCachedAdminLiveEvents(adminEvents)
         val sports = getCachedSportsMatches().filterNot { it.id == id || isItemDeleted(it) }
         saveCachedSportsMatches(sports)
+
+        val liveTv = getCachedLiveTvChannels().filterNot { it.id == id || isItemDeleted(it) }
+        saveCachedLiveTvChannels(liveTv)
+        cachedBuiltinLiveTv = null
+
+        val movies = getCachedMoviesList().filterNot { it.id == id || isItemDeleted(it) }
+        saveCachedMoviesList(movies)
+        cachedBuiltinMovies = null
     }
 
     suspend fun deleteMediaItem(item: MediaItem): Boolean {
@@ -2545,6 +2565,7 @@ class MediaRepository(private val context: Context) {
     // -------------------------------------------------------------
     fun getInitialPlaylists(): List<PlaylistInfo> {
         val deleted = getDeletedIds()
+        val adminPlaylists = getAdminPlaylists()
         val defaultList = listOf(
             PlaylistInfo(
                 id = "pl_starshare_premium",
@@ -2570,7 +2591,9 @@ class MediaRepository(private val context: Context) {
                 isReadOnly = false
             )
         )
-        return defaultList.filterNot { deleted.contains(it.id) }
+        return defaultList.map { defaultPl ->
+            adminPlaylists.firstOrNull { it.id == defaultPl.id } ?: defaultPl
+        }.filterNot { deleted.contains(it.id) }
     }
 
     fun buildXtreamM3uUrl(serverUrl: String, username: String, pass: String): String {
@@ -5068,6 +5091,13 @@ class MediaRepository(private val context: Context) {
         current.removeAll { it.id == playlist.id }
         current.add(0, playlist.copy(isAdmin = true, isReadOnly = true))
         saveAdminPlaylistsList(current)
+
+        // Clear all channel and movie caches for this playlist so new channels/URLs are loaded immediately!
+        playlistChannelsMemoryCache.remove(playlist.id)
+        memoryFileCache.remove("cache_playlist_${playlist.id}")
+        memoryFileCache.remove("cache_movies_pl_${playlist.id}.json")
+        try { java.io.File(context.filesDir, "cache_playlist_${playlist.id}").delete() } catch (_: Exception) {}
+        try { java.io.File(context.filesDir, "cache_movies_pl_${playlist.id}.json").delete() } catch (_: Exception) {}
     }
 
     fun saveAdminPlaylistsList(list: List<PlaylistInfo>) {
@@ -5098,6 +5128,12 @@ class MediaRepository(private val context: Context) {
         addDeletedId(id)
         val current = getAdminPlaylists().filterNot { it.id == id }
         saveAdminPlaylistsList(current)
+
+        playlistChannelsMemoryCache.remove(id)
+        memoryFileCache.remove("cache_playlist_$id")
+        memoryFileCache.remove("cache_movies_pl_$id.json")
+        try { java.io.File(context.filesDir, "cache_playlist_$id").delete() } catch (_: Exception) {}
+        try { java.io.File(context.filesDir, "cache_movies_pl_$id.json").delete() } catch (_: Exception) {}
     }
 
     fun getCustomPlaylists(): List<PlaylistInfo> {
@@ -5408,6 +5444,9 @@ class MediaRepository(private val context: Context) {
 
     fun saveLiveTvM3uUrl(url: String) {
         prefs.edit().putString("saved_live_tv_m3u_url", url).apply()
+        memoryFileCache.remove("cache_livetv_v3.json")
+        cachedBuiltinLiveTv = null
+        try { java.io.File(context.filesDir, "cache_livetv_v3.json").delete() } catch (_: Exception) {}
     }
 
     fun getSavedLiveTvM3uUrl(): String {
@@ -6025,6 +6064,9 @@ class MediaRepository(private val context: Context) {
 
     fun saveMoviesM3uUrl(url: String) {
         prefs.edit().putString("saved_movies_m3u_url", url).apply()
+        memoryFileCache.remove("cache_movies_v2.json")
+        cachedBuiltinMovies = null
+        try { java.io.File(context.filesDir, "cache_movies_v2.json").delete() } catch (_: Exception) {}
     }
 
     fun getSavedMoviesM3uUrl(): String {
