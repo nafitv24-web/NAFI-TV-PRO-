@@ -750,7 +750,7 @@ fun NafiTvMainApp(
                 val initial = repository.getInitialPlaylists()
                 val adminPl = repository.getAdminPlaylists().map { it.copy(isAdmin = true, isReadOnly = true) }
                 val userPl = repository.getUserPlaylists().map { it.copy(isAdmin = false, isReadOnly = false) }
-                adminPlaylistsList = (adminPl + userPl + initial).distinctBy { it.id }
+                adminPlaylistsList = (adminPl + userPl + adminPlaylistsList + initial).distinctBy { it.id }
                 playlistsList = adminPlaylistsList.filterNot {
                     it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
                     it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||

@@ -5092,6 +5092,11 @@ class MediaRepository(private val context: Context) {
         current.add(0, playlist.copy(isAdmin = true, isReadOnly = true))
         saveAdminPlaylistsList(current)
 
+        val userCurrent = getUserPlaylists().toMutableList()
+        if (userCurrent.removeAll { it.id == playlist.id }) {
+            saveUserPlaylistsList(userCurrent)
+        }
+
         // Clear all channel and movie caches for this playlist so new channels/URLs are loaded immediately!
         playlistChannelsMemoryCache.remove(playlist.id)
         memoryFileCache.remove("cache_playlist_${playlist.id}")

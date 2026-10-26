@@ -23,7 +23,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +63,7 @@ fun AdminControlAppScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
 
     // BackHandler to exit Admin View back to main app
     BackHandler {
@@ -3817,7 +3820,24 @@ fun AdminControlAppScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = customFieldColors(),
                                 shape = RoundedCornerShape(12.dp),
-                                singleLine = true
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (playlistUrl.isNotBlank()) {
+                                            IconButton(onClick = { playlistUrl = "" }) {
+                                                Icon(Icons.Rounded.Clear, contentDescription = "Clear", tint = Color(0xFFEF4444), modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                        IconButton(onClick = {
+                                            val clip = clipboardManager.getText()?.text?.trim()
+                                            if (!clip.isNullOrBlank()) {
+                                                playlistUrl = clip
+                                                Toast.makeText(context, "URL পেস্ট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }) {
+                                            Icon(Icons.Rounded.DownloadDone, contentDescription = "Paste", tint = Color(0xFF00E5FF), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
                             )
 
                             OutlinedTextField(
@@ -3909,7 +3929,7 @@ fun AdminControlAppScreen(
                         (it.description != null && it.description.contains("OTT Movie", ignoreCase = true))
                     }
 
-                val filteredPlaylists = (customPlaylists + playlistsList)
+                val filteredPlaylists = (repository.getAdminPlaylists() + customPlaylists + playlistsList)
                     .distinctBy { it.id }
                     .filterNot {
                         it.isMovieOnly ||
@@ -6690,18 +6710,18 @@ fun AdminControlAppScreen(
             properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Card(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E5FF)),
                 modifier = Modifier
-                    .fillMaxWidth(0.95f)
-                    .wrapContentHeight()
+                    .fillMaxWidth(0.96f)
+                    .fillMaxHeight(0.88f)
+                    .imePadding()
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .fillMaxSize()
+                        .padding(18.dp)
                 ) {
                     // Header
                     Row(
@@ -6711,27 +6731,29 @@ fun AdminControlAppScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Surface(
-                                color = Color(0xFF00E5FF).copy(alpha = 0.2f),
+                                color = Color(0xFF00E5FF).copy(alpha = 0.15f),
                                 shape = CircleShape,
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(42.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f))
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.FeaturedPlayList, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                                    Icon(Icons.Rounded.FeaturedPlayList, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(24.dp))
                                 }
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text(
-                                    text = "প্লেলিস্ট এডিট করুন",
+                                    text = "প্লেলিস্ট লিংক ও তথ্য এডিট করুন",
                                     color = Color.White,
-                                    fontSize = 16.sp,
+                                    fontSize = 17.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = target.title,
-                                    color = Color(0xFF94A3B8),
-                                    fontSize = 11.sp,
-                                    maxLines = 1
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -6740,55 +6762,184 @@ fun AdminControlAppScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(10.dp))
                     HorizontalDivider(color = Color(0xFF334155))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // Playlist Title
-                    OutlinedTextField(
-                        value = editPlaylistTitle,
-                        onValueChange = { editPlaylistTitle = it },
-                        label = { Text("প্লেলিস্টের নাম (Playlist Name)") },
-                        colors = customFieldColors(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Scrollable Form with Keyboard Insets Handling
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        // Playlist Title
+                        OutlinedTextField(
+                            value = editPlaylistTitle,
+                            onValueChange = { editPlaylistTitle = it },
+                            label = { Text("প্লেলিস্টের নাম (Playlist Name)") },
+                            colors = customFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Rounded.Edit, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
 
-                    // Playlist M3U URL
-                    OutlinedTextField(
-                        value = editPlaylistUrl,
-                        onValueChange = { editPlaylistUrl = it },
-                        label = { Text("প্লেলিস্ট M3U / M3U8 URL") },
-                        colors = customFieldColors(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                        // Playlist M3U URL with direct Paste, Copy, Clear actions
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "প্লেলিস্ট M3U / M3U8 URL (লিংক):",
+                                color = Color(0xFFE2E8F0),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            OutlinedTextField(
+                                value = editPlaylistUrl,
+                                onValueChange = { editPlaylistUrl = it },
+                                placeholder = { Text("https://example.com/playlist.m3u", color = Color(0xFF64748B)) },
+                                colors = customFieldColors(),
+                                shape = RoundedCornerShape(12.dp),
+                                minLines = 2,
+                                maxLines = 4,
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Link, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                                },
+                                trailingIcon = {
+                                    if (editPlaylistUrl.isNotBlank()) {
+                                        IconButton(onClick = { editPlaylistUrl = "" }) {
+                                            Icon(Icons.Rounded.Clear, contentDescription = "Clear", tint = Color(0xFFEF4444), modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
 
-                    // Logo / Banner URL
-                    OutlinedTextField(
-                        value = editPlaylistLogoUrl,
-                        onValueChange = { editPlaylistLogoUrl = it },
-                        label = { Text("লোগো / ব্যানার URL (ঐচ্ছিক)") },
-                        colors = customFieldColors(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                            // 1-Tap Quick Action Row: Paste, Copy, Clear
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // Paste Button
+                                Button(
+                                    onClick = {
+                                        val clipText = clipboardManager.getText()?.text?.trim()
+                                        if (!clipText.isNullOrBlank()) {
+                                            editPlaylistUrl = clipText
+                                            Toast.makeText(context, "লিংক পেস্ট করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "ক্লিপবোর্ডে কোনো লিংক নেই", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1.3f)
+                                        .height(38.dp)
+                                ) {
+                                    Icon(Icons.Rounded.DownloadDone, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("পেস্ট (Paste)", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
 
-                    // Description
-                    OutlinedTextField(
-                        value = editPlaylistDescription,
-                        onValueChange = { editPlaylistDescription = it },
-                        label = { Text("বিবরণ (Short Description)") },
-                        colors = customFieldColors(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                                // Copy Button
+                                Button(
+                                    onClick = {
+                                        if (editPlaylistUrl.isNotBlank()) {
+                                            clipboardManager.setText(AnnotatedString(editPlaylistUrl))
+                                            Toast.makeText(context, "লিংক কপি হয়েছে!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF475569)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                ) {
+                                    Icon(Icons.Rounded.ContentCopy, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("কপি", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                                }
 
+                                // Clear Button
+                                Button(
+                                    onClick = { editPlaylistUrl = "" },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    modifier = Modifier
+                                        .weight(0.9f)
+                                        .height(38.dp)
+                                ) {
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("মুছুন", color = Color(0xFFEF4444), fontSize = 12.sp)
+                                }
+                            }
+                        }
+
+                        // Logo / Banner URL (Optional)
+                        OutlinedTextField(
+                            value = editPlaylistLogoUrl,
+                            onValueChange = { editPlaylistLogoUrl = it },
+                            label = { Text("লোগো / ব্যানার URL (ঐচ্ছিক)") },
+                            placeholder = { Text("https://example.com/logo.png", color = Color(0xFF64748B)) },
+                            colors = customFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Rounded.MovieFilter, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // Description
+                        OutlinedTextField(
+                            value = editPlaylistDescription,
+                            onValueChange = { editPlaylistDescription = it },
+                            label = { Text("বিবরণ / নোট (Short Description)") },
+                            colors = customFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            leadingIcon = {
+                                Icon(Icons.Rounded.QueueMusic, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(20.dp))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // Instant Refresh & Cache Cleared Notification Card
+                        Surface(
+                            color = Color(0xFF1E293B).copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "সেভ করার সাথে সাথে ক্যাশ ক্লিয়ার হয়ে নতুন লিংকের সব চ্যানেল সুপারফাস্ট লোড হবে।",
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
                     HorizontalDivider(color = Color(0xFF334155))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                    // Action buttons
+                    // Pinned Bottom Actions (Cancel & Save)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -6814,17 +6965,20 @@ fun AdminControlAppScreen(
                                             cleanUrl.contains("movie", ignoreCase = true) ||
                                             target.isMovieOnly ||
                                             target.type.equals("MOVIE", ignoreCase = true)
+                                    val isM3u = cleanUrl.contains(".m3u", ignoreCase = true) || cleanUrl.contains(".m3u8", ignoreCase = true)
 
                                     val updatedPl = target.copy(
                                         title = editPlaylistTitle.trim(),
                                         url = cleanUrl,
                                         logoUrl = editPlaylistLogoUrl.trim().takeIf { it.isNotBlank() },
                                         description = editPlaylistDescription.trim().takeIf { it.isNotBlank() },
-                                        serverUrl = creds?.first ?: if (cleanUrl.contains("://") && !cleanUrl.endsWith(".m3u", ignoreCase = true) && !cleanUrl.endsWith(".m3u8", ignoreCase = true)) cleanUrl else target.serverUrl,
-                                        username = creds?.second ?: target.username,
-                                        password = creds?.third ?: target.password,
-                                        type = if (creds != null) "XTREAM" else if (isMovie) "MOVIE" else target.type,
-                                        isMovieOnly = isMovie
+                                        serverUrl = if (creds != null) creds.first else if (!isM3u && cleanUrl.contains("://")) cleanUrl else null,
+                                        username = if (creds != null) creds.second else if (!isM3u) target.username else null,
+                                        password = if (creds != null) creds.third else if (!isM3u) target.password else null,
+                                        type = if (creds != null) "XTREAM" else if (isMovie) "MOVIE" else if (isM3u) "M3U" else target.type,
+                                        isMovieOnly = isMovie,
+                                        isAdmin = true,
+                                        isReadOnly = true
                                     )
 
                                     repository.saveAdminPlaylist(updatedPl)
