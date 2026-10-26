@@ -117,7 +117,7 @@ fun BreakingNewsTickerBar(
 
             // Scrolling Marquee Text
             Text(
-                text = tickerText.ifBlank { "NAFI TV24 এ ক্রিকেট, ফুটবল ও লাইভ টিভি চ্যানেল সম্পূর্ণ বিনামূল্যে উপভোগ করুন।" },
+                text = tickerText.ifBlank { "NAFI TV Pro এ ক্রিকেট, ফুটবল ও লাইভ টিভি চ্যানেল সম্পূর্ণ বিনামূল্যে উপভোগ করুন।" },
                 color = Color(0xFFF8FAFC),
                 fontSize = if (isTvMode) 12.5.sp else 11.5.sp,
                 fontWeight = FontWeight.Medium,

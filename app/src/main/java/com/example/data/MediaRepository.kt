@@ -110,6 +110,15 @@ class MediaRepository(private val context: Context) {
         const val FIRESTORE_DATABASE_ID = "ai-studio-android-remixnaf-b52fd7d3-5c40-4783-9706-71071143400c"
         const val LEGACY_FIREBASE_PROJECT_ID = "nafitv24-live"
         const val LEGACY_FIREBASE_API_KEY = "AIzaSyDEhKK6T9kpKHICq4VSAXWoIQwQtfDFAX8"
+
+        // Global In-Memory Shared Cache across all repository instances for instantaneous 0ms response
+        val memoryFileCache = java.util.concurrent.ConcurrentHashMap<String, List<MediaItem>>()
+        val cacheWriteExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val deletedIdsMemorySet = java.util.concurrent.CopyOnWriteArraySet<String>()
+        val deletedTitlesMemorySet = java.util.concurrent.CopyOnWriteArraySet<String>()
+        @Volatile var cachedBuiltinLiveTv: List<MediaItem>? = null
+        @Volatile var cachedBuiltinMovies: List<MediaItem>? = null
+        @Volatile var cachedCustomStreams: List<MediaItem>? = null
     }
 
     fun getMarqueeTickerText(): String {
@@ -308,9 +317,6 @@ class MediaRepository(private val context: Context) {
     // -------------------------------------------------------------
     // Deleted Items Persistence (Ensures deleted items NEVER reappear)
     // -------------------------------------------------------------
-    private val deletedIdsMemorySet = java.util.concurrent.CopyOnWriteArraySet<String>()
-    private val deletedTitlesMemorySet = java.util.concurrent.CopyOnWriteArraySet<String>()
-
     fun getDeletedIds(): Set<String> {
         if (deletedIdsMemorySet.isNotEmpty()) return deletedIdsMemorySet.toSet()
         val storedJson = prefs.getString("deleted_ids_v2", null)
@@ -471,10 +477,6 @@ class MediaRepository(private val context: Context) {
             e.printStackTrace()
         }
     }
-
-    // High-speed In-Memory Cache to completely eliminate file read and JSON parsing freezes on app startup
-    private val memoryFileCache = java.util.concurrent.ConcurrentHashMap<String, List<MediaItem>>()
-    private val cacheWriteExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     fun readJsonObjectFromReader(reader: android.util.JsonReader): JSONObject {
         val obj = JSONObject()
@@ -681,6 +683,7 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getDefaultBuiltinLiveTv(): List<MediaItem> {
+        cachedBuiltinLiveTv?.let { return it }
         val assetChannels = try {
             val jsonString = context.assets.open("livetv.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
             parseMediaFromJsonString(jsonString, defaultCategory = "BANGLADESH", defaultType = MediaType.LIVE_TV).map {
@@ -691,7 +694,9 @@ class MediaRepository(private val context: Context) {
             emptyList()
         }
         if (assetChannels.isNotEmpty()) {
-            return assetChannels.filterNot { isDemoChannel(it) }
+            val filtered = assetChannels.filterNot { isDemoChannel(it) }
+            cachedBuiltinLiveTv = filtered
+            return filtered
         }
         return listOf(
             MediaItem(
@@ -869,13 +874,16 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getDefaultBuiltinMovies(): List<MediaItem> {
-        return try {
+        cachedBuiltinMovies?.let { return it }
+        val result = try {
             val jsonString = context.assets.open("movies.json").bufferedReader().use { it.readText() }
             parseMediaFromJsonString(jsonString, defaultCategory = "BANGLA", defaultType = MediaType.MOVIE)
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
         }
+        cachedBuiltinMovies = result
+        return result
     }
 
     // High-speed instant loaders (Always return immediate items in 0 milliseconds, never empty)
@@ -921,9 +929,6 @@ class MediaRepository(private val context: Context) {
         }
         return (customMov + baseList).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
     }
-
-    // In-memory cache for custom streams to avoid repeated SharedPreferences JSON parsing
-    private var cachedCustomStreams: List<MediaItem>? = null
 
     // Custom streams saved locally in SharedPreferences
     fun getCustomStreams(): List<MediaItem> {

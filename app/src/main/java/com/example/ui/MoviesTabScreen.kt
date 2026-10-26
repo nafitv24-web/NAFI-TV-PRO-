@@ -145,6 +145,7 @@ fun MoviesTabScreen(
     isLoading: Boolean = false,
     isTvMode: Boolean = false,
     isAdultHidden: Boolean = true,
+    isDarkMode: Boolean = true,
     repository: MediaRepository? = null,
     onSelectMedia: (MediaItem) -> Unit,
     onSelectMediaWithPlaylist: ((MediaItem, List<MediaItem>) -> Unit)? = null,

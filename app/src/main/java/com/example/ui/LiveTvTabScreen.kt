@@ -403,11 +403,7 @@ fun LiveTvTabScreen(
                             ) {
                                 if (!channel.logoUrl.isNullOrBlank()) {
                                     AsyncImage(
-                                        model = coil.request.ImageRequest.Builder(context)
-                                            .data(channel.logoUrl)
-                                            .crossfade(false)
-                                            .size(128, 128)
-                                            .build(),
+                                        model = channel.logoUrl,
                                         contentDescription = channel.title,
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier

@@ -92,6 +92,7 @@ fun PlaylistTabScreen(
     repository: MediaRepository,
     isTvMode: Boolean = false,
     isAdultHidden: Boolean = true,
+    isDarkMode: Boolean = true,
     onSelectMedia: (MediaItem, List<MediaItem>) -> Unit,
     onPlaylistsChanged: () -> Unit
 ) {

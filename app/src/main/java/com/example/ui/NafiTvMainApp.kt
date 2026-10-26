@@ -163,7 +163,7 @@ fun NafiTvMainApp(
             "AUTO" -> AppUserMode.AUTO
             "REMOTE" -> AppUserMode.REMOTE
             "MOBILE" -> AppUserMode.MOBILE
-            else -> null
+            else -> AppUserMode.AUTO
         }
     }
     var activeUserMode by remember { mutableStateOf<AppUserMode?>(initialSavedMode) }
@@ -3442,18 +3442,9 @@ fun EventsScreen(
     }
     val statusFilters = listOf("All", "🔴 Live", "Upcoming", "Today", "Recent Results")
 
-    // Live ticking countdown state (real-time 1-second interval)
-    var tickCount by remember { mutableStateOf(0L) }
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            kotlinx.coroutines.delay(1000L)
-            tickCount++
-        }
-    }
-
-    val filteredSports = remember(sports, selectedCategory, selectedStatus, searchQuery, tickCount / 10L) {
+    val filteredSports = remember(sports, selectedCategory, selectedStatus, searchQuery) {
         val filtered = sports.filter { item ->
-            val isLive = isEventLiveNow(item, tickCount)
+            val isLive = isEventLiveNow(item, 0L)
             val catMatches = when (selectedCategory) {
                 "All" -> true
                 "Cricket" -> item.category.contains("Cricket", ignoreCase = true) || item.tournament?.contains("Cricket", ignoreCase = true) == true || item.title.contains("Cricket", ignoreCase = true) || item.team1?.contains("Cricket", ignoreCase = true) == true
@@ -3690,7 +3681,6 @@ fun EventsScreen(
                 items(filteredSports, key = { it.id }) { sport ->
                     LiveEventMatchCard(
                         sport = sport,
-                        tickCount = tickCount,
                         isTvMode = isTvMode,
                         onSelectMedia = onSelectMedia
                     )
