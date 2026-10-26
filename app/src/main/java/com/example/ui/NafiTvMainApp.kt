@@ -674,11 +674,11 @@ fun NafiTvMainApp(
             activePlaybackPlaylist
         } else {
             when (currentTab) {
-                AppTab.LIVE_TV -> mergeChannelsWithServers(liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive })
-                AppTab.MOVIES -> (moviesList + customList.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES } + m3uList.filter { it.type == MediaType.MOVIE }).distinctBy { it.id }
-                AppTab.EVENTS -> sportsList.distinctBy { it.id }
-                AppTab.PLAYLIST -> (customList + m3uList).distinctBy { it.id }
-                else -> (liveTvList + sportsList + moviesList + customList + m3uList).distinctBy { it.id }
+                AppTab.LIVE_TV -> allLiveChannels
+                AppTab.MOVIES -> moviesList
+                AppTab.EVENTS -> sportsList
+                AppTab.PLAYLIST -> customList + m3uList
+                else -> allLiveChannels
             }
         }
         VideoPlayerScreen(
@@ -3674,7 +3674,14 @@ fun EventsScreen(
                     }
                 }
             }
-        } else {
+            var globalEventsTick by remember { mutableLongStateOf(0L) }
+            LaunchedEffect(Unit) {
+                while (isActive) {
+                    kotlinx.coroutines.delay(1000L)
+                    globalEventsTick++
+                }
+            }
+
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3683,6 +3690,7 @@ fun EventsScreen(
                 items(filteredSports, key = { it.id }) { sport ->
                     LiveEventMatchCard(
                         sport = sport,
+                        tickCount = globalEventsTick,
                         isTvMode = isTvMode,
                         onSelectMedia = onSelectMedia
                     )
@@ -3705,12 +3713,14 @@ fun LiveEventMatchCard(
     var isCardFocused by remember { mutableStateOf(false) }
     var showNoLinkDialog by remember { mutableStateOf(false) }
 
-    // Real-time 1-second ticking ticker guarantee
-    var localTick by remember { mutableStateOf(0L) }
-    LaunchedEffect(sport.id, sport.countdownTargetSeconds, sport.matchTimeFormatted, sport.eventTime) {
-        while (isActive) {
-            kotlinx.coroutines.delay(1000L)
-            localTick++
+    // Unified ticking ticker guarantee (reuses parent globalEventsTick if supplied)
+    var localTick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(sport.id, tickCount) {
+        if (tickCount <= 0L) {
+            while (isActive) {
+                kotlinx.coroutines.delay(1000L)
+                localTick++
+            }
         }
     }
 

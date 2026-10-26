@@ -610,25 +610,25 @@ fun MoviesTabScreen(
     }
     var sortOrder by remember { mutableStateOf("NEWEST") }
 
-    // 4. Background Filtered movies calculation: NEVER freezes during search or category selection
-    var filteredMovies by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    LaunchedEffect(preparedMovies, debouncedSearchQuery, selectedCategory, favoriteIds, sortOrder, preparedFullCategorizedMap) {
-        withContext(Dispatchers.Default) {
-            if (selectedCategory == "ডাউনলোডসমূহ") {
-                withContext(Dispatchers.Main) { filteredMovies = emptyList() }
-                return@withContext
-            }
+    // 4. Instantaneous Filtered movies calculation: Zero delay during search or category selection
+    val filteredMovies = remember(preparedMovies, debouncedSearchQuery, selectedCategory, favoriteIds, sortOrder, preparedFullCategorizedMap) {
+        if (selectedCategory == "ডাউনলোডসমূহ") {
+            return@remember emptyList()
+        }
 
-            val source = if (selectedCategory != "All" && selectedCategory != "❤️ Favorites") {
-                preparedFullCategorizedMap[selectedCategory] ?: preparedMovies.filter {
-                    it.category.trim().equals(selectedCategory.trim(), ignoreCase = true)
-                }
-            } else {
-                preparedMovies
+        val source = if (selectedCategory != "All" && selectedCategory != "❤️ Favorites") {
+            preparedFullCategorizedMap[selectedCategory] ?: preparedMovies.filter {
+                it.category.trim().equals(selectedCategory.trim(), ignoreCase = true)
             }
+        } else {
+            preparedMovies
+        }
 
-            val query = debouncedSearchQuery.trim()
-            val filtered = source.asSequence().filter { movie ->
+        val query = debouncedSearchQuery.trim()
+        val filtered = if (query.isBlank() && selectedCategory != "❤️ Favorites") {
+            source
+        } else {
+            source.asSequence().filter { movie ->
                 val matchesSearch = if (query.isBlank()) true else {
                     movie.title.contains(query, ignoreCase = true) ||
                             movie.category.contains(query, ignoreCase = true) ||
@@ -639,20 +639,15 @@ fun MoviesTabScreen(
                 val matchesFav = if (selectedCategory == "❤️ Favorites") favoriteIds.contains(movie.id) else true
                 matchesSearch && matchesFav
             }.distinctBy { it.id }.toList()
-
-            val sorted = when (sortOrder) {
-                "RATING" -> filtered.sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
-                "TITLE" -> filtered.sortedBy { it.title.lowercase() }
-                else -> filtered.sortedByDescending { it.movieSortWeight }
-            }
-
-            // Limit results to 300 for blazing smooth 120 FPS grid scrolling
-            val clamped = if (sorted.size > 300 && query.isNotBlank()) sorted.take(300) else sorted
-
-            withContext(Dispatchers.Main) {
-                filteredMovies = clamped
-            }
         }
+
+        val sorted = when (sortOrder) {
+            "RATING" -> filtered.sortedByDescending { it.rating?.toDoubleOrNull() ?: 0.0 }
+            "TITLE" -> filtered.sortedBy { it.title.lowercase() }
+            else -> filtered
+        }
+
+        if (sorted.size > 300 && query.isNotBlank()) sorted.take(300) else sorted
     }
 
     Column(

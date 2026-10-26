@@ -44,40 +44,42 @@ private val SERVER_CLEAN_REGEX = Regex("^(?i)(server|সার্ভার)\\s*\
 
 fun mergeChannelsWithServers(channels: List<MediaItem>): List<MediaItem> {
     if (channels.isEmpty()) return emptyList()
-    val nonDemo = channels.filterNot { item ->
-        val id = item.id.lowercase()
-        val title = item.title.lowercase()
-        val cat = item.category.lowercase()
-        val url = item.streamUrl.lowercase()
-        val allUrls = (item.servers.map { it.url.lowercase() } + listOf(url)).joinToString(" ")
+    fun isDemoUrl(u: String): Boolean =
+        u.contains("test-streams.mux.dev") ||
+        u.contains("akamaized.net/hls/live/2000341/test") ||
+        u.contains("bitdash-a.akamaihd.net") ||
+        u.contains("bipbop") ||
+        u.contains("bigbuckbunny")
 
-        id.startsWith("demo_") ||
-                id.contains("demo_sample") ||
-                title.contains("demo channel") ||
-                title.contains("ডেমো চ্যানেল") ||
-                title.contains("test stream") ||
-                title.contains("পরীক্ষামূলক টেস্ট") ||
-                allUrls.contains("test-streams.mux.dev") ||
-                allUrls.contains("akamaized.net/hls/live/2000341/test") ||
-                allUrls.contains("bitdash-a.akamaihd.net") ||
-                allUrls.contains("bipbop") ||
-                allUrls.contains("bigbuckbunny")
-    }
-    // User requirement: "লাইভ টিভি অপশনে সকল চ্যানেল আসবে এক নামে দুটি চ্যানেল থাকলেও"
-    // Keep all channels intact even with identical names, guaranteeing unique IDs for Compose rendering
-    val seenIds = HashSet<String>()
-    return nonDemo.mapIndexed { index, item ->
+    val seenIds = HashSet<String>(channels.size)
+    val result = ArrayList<MediaItem>(channels.size)
+    var index = 0
+    for (item in channels) {
+        val id = item.id.lowercase()
+        if (id.startsWith("demo_") || id.contains("demo_sample")) continue
+        val title = item.title.lowercase()
+        if (title.contains("demo channel") || title.contains("ডেমো চ্যানেল") || title.contains("test stream") || title.contains("পরীক্ষামূলক টেস্ট")) continue
+        val url = item.streamUrl.lowercase()
+        if (isDemoUrl(url)) continue
+        var isDemo = false
+        for (s in item.servers) {
+            if (isDemoUrl(s.url.lowercase())) {
+                isDemo = true
+                break
+            }
+        }
+        if (isDemo) continue
+
         val safeServers = item.getAllServers()
         var uniqueId = item.id.ifBlank { "ch_${index}_${Math.abs(item.title.hashCode())}" }
         if (seenIds.contains(uniqueId)) {
             uniqueId = "${uniqueId}_${index}"
         }
         seenIds.add(uniqueId)
-        item.copy(
-            id = uniqueId,
-            servers = safeServers
-        )
+        result.add(item.copy(id = uniqueId, servers = safeServers))
+        index++
     }
+    return result
 }
 
 @Composable
@@ -101,55 +103,24 @@ fun LiveTvTabScreen(
     val coroutineScope = rememberCoroutineScope()
     val firstChannelFocusRequester = remember { FocusRequester() }
 
-    // Instantaneous 0ms channel preparation from incoming channels
+    // Instantaneous 0ms channel preparation with memory-cached filter checks
     val shouldFilterAdult = isAdultHidden || (repository?.isAdultContentHidden() == true)
-    var preparedChannels by remember(channels, shouldFilterAdult) {
-        val initialFiltered = if (shouldFilterAdult && repository != null) {
-            channels.filterNot { repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
+    val preparedChannels = remember(channels, shouldFilterAdult) {
+        val merged = mergeChannelsWithServers(channels)
+        if (shouldFilterAdult && repository != null) {
+            merged.filterNot { repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
         } else if (shouldFilterAdult) {
             val adultWords = listOf("adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "porn", "sex", "sensual", "mature", "brazzers", "playboy", "hustler", "for adults")
-            channels.filterNot { ch ->
+            merged.filterNot { ch ->
                 val txt = "${ch.title} ${ch.category} ${ch.genre ?: ""}".lowercase()
                 adultWords.any { txt.contains(it) }
             }
         } else {
-            channels
+            merged
         }
-        mutableStateOf(initialFiltered)
     }
-    var preparedCategories by remember(preparedChannels) {
-        mutableStateOf(
-            listOf("ALL", "FAVORITE") + preparedChannels.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct()
-        )
-    }
-    var isAsyncPreparing by remember { mutableStateOf(false) }
-
-    LaunchedEffect(channels, shouldFilterAdult, repository) {
-        if (channels.isEmpty()) {
-            preparedChannels = emptyList()
-            preparedCategories = listOf("ALL")
-            return@LaunchedEffect
-        }
-        withContext(Dispatchers.Default) {
-            val merged = mergeChannelsWithServers(channels)
-            val adultFiltered = if (shouldFilterAdult && repository != null) {
-                merged.filterNot { repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
-            } else if (shouldFilterAdult) {
-                val adultWords = listOf("adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "porn", "sex", "sensual", "mature", "brazzers", "playboy", "hustler", "for adults")
-                merged.filterNot { ch ->
-                    val txt = "${ch.title} ${ch.category} ${ch.genre ?: ""}".lowercase()
-                    adultWords.any { txt.contains(it) }
-                }
-            } else {
-                merged
-            }
-            val cats = listOf("ALL", "FAVORITE") + adultFiltered.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct()
-
-            withContext(Dispatchers.Main) {
-                preparedChannels = adultFiltered
-                preparedCategories = cats
-            }
-        }
+    val preparedCategories = remember(preparedChannels) {
+        listOf("ALL", "FAVORITE") + preparedChannels.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct()
     }
 
     // Trigger non-blocking background health check on unverified channels ONLY if user turned on showOnlyActive filter
@@ -325,7 +296,7 @@ fun LiveTvTabScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // Channels Grid or Loading View
-        if ((isLoading || isAsyncPreparing) && preparedChannels.isEmpty()) {
+        if (isLoading && preparedChannels.isEmpty()) {
             NafiLogoLoadingView(
                 title = "লাইভ টিভি চ্যানেল লোড হচ্ছে...",
                 subtitle = "অনুগ্রহ করে অপেক্ষা করুন, টিভি চ্যানেল ও সার্ভার প্রস্তুত হচ্ছে...",

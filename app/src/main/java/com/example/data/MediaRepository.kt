@@ -623,22 +623,22 @@ class MediaRepository(private val context: Context) {
 
     fun isDemoChannel(item: MediaItem): Boolean {
         val id = item.id.lowercase()
+        if (id.startsWith("demo_") || id.contains("demo_sample")) return true
         val title = item.title.lowercase()
-        val cat = item.category.lowercase()
+        if (title.contains("demo channel") || title.contains("ডেমো চ্যানেল") || title.contains("test stream") || title.contains("পরীক্ষামূলক টেস্ট")) return true
         val url = item.streamUrl.lowercase()
-        val allUrls = (item.servers.map { it.url.lowercase() } + listOf(url)).joinToString(" ")
+        fun isDemoUrl(u: String): Boolean =
+            u.contains("test-streams.mux.dev") ||
+            u.contains("akamaized.net/hls/live/2000341/test") ||
+            u.contains("bitdash-a.akamaihd.net") ||
+            u.contains("bipbop") ||
+            u.contains("bigbuckbunny")
 
-        return id.startsWith("demo_") ||
-                id.contains("demo_sample") ||
-                title.contains("demo channel") ||
-                title.contains("ডেমো চ্যানেল") ||
-                title.contains("test stream") ||
-                title.contains("পরীক্ষামূলক টেস্ট") ||
-                allUrls.contains("test-streams.mux.dev") ||
-                allUrls.contains("akamaized.net/hls/live/2000341/test") ||
-                allUrls.contains("bitdash-a.akamaihd.net") ||
-                allUrls.contains("bipbop") ||
-                allUrls.contains("bigbuckbunny")
+        if (isDemoUrl(url)) return true
+        for (server in item.servers) {
+            if (isDemoUrl(server.url.lowercase())) return true
+        }
+        return false
     }
 
     fun getCachedMoviesList(): List<MediaItem> {
@@ -9054,44 +9054,66 @@ class MediaRepository(private val context: Context) {
 
     // -------------------------------------------------------------
     // ADULT / 18+ CONTENT PARENTAL CONTROL / SAFE MODE
-    // Default is TRUE (hidden automatically by default)
+    // In-memory cached for ultra-fast loop evaluation (zero disk reads during scrolling/filtering)
     // -------------------------------------------------------------
+    @Volatile private var cachedAdultHidden: Boolean? = null
+    @Volatile private var cachedHiddenKeywords: Set<String>? = null
+    @Volatile private var cachedHiddenItemIds: Set<String>? = null
+
     fun isAdultContentHidden(): Boolean {
-        return prefs.getBoolean("hide_adult_content", true)
+        val cached = cachedAdultHidden
+        if (cached != null) return cached
+        val read = prefs.getBoolean("hide_adult_content", true)
+        cachedAdultHidden = read
+        return read
     }
 
     fun setHideAdultContent(hidden: Boolean) {
+        cachedAdultHidden = hidden
         prefs.edit().putBoolean("hide_adult_content", hidden).apply()
     }
 
     fun getHiddenKeywords(): Set<String> {
+        val cached = cachedHiddenKeywords
+        if (cached != null) return cached
         val stored = prefs.getStringSet("admin_hidden_keywords", null)
-        if (!stored.isNullOrEmpty()) {
-            return stored
+        val res = if (!stored.isNullOrEmpty()) {
+            stored
+        } else {
+            val legacy = prefs.getString("hidden_keywords", null)
+            if (!legacy.isNullOrBlank()) {
+                legacy.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            } else {
+                setOf(
+                    "adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "erotica", "porn", "sex", "sensual",
+                    "mature", "ullu", "kooku", "primeshots", "rabbit", "besharams", "hotx", "chikoo",
+                    "boomx", "cinemadosti", "cinema dosti", "redprime", "gupchup", "hunt", "feneo",
+                    "fliz", "voovi", "feelit", "unrated hot", "softcore", "nuefliks", "hotshots"
+                )
+            }
         }
-        val legacy = prefs.getString("hidden_keywords", null)
-        if (!legacy.isNullOrBlank()) {
-            return legacy.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
-        }
-        return setOf(
-            "adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "erotica", "porn", "sex", "sensual",
-            "mature", "ullu", "kooku", "primeshots", "rabbit", "besharams", "hotx", "chikoo",
-            "boomx", "cinemadosti", "cinema dosti", "redprime", "gupchup", "hunt", "feneo",
-            "fliz", "voovi", "feelit", "unrated hot", "softcore", "nuefliks", "hotshots"
-        )
+        cachedHiddenKeywords = res
+        return res
     }
 
     fun setHiddenKeywords(keywords: Collection<String>) {
-        prefs.edit().putStringSet("admin_hidden_keywords", keywords.toSet()).apply()
+        val set = keywords.toSet()
+        cachedHiddenKeywords = set
+        prefs.edit().putStringSet("admin_hidden_keywords", set).apply()
     }
 
     fun getHiddenItemIds(): Set<String> {
-        return prefs.getStringSet("admin_hidden_media_ids", emptySet()) ?: emptySet()
+        val cached = cachedHiddenItemIds
+        if (cached != null) return cached
+        val res = prefs.getStringSet("admin_hidden_media_ids", emptySet()) ?: emptySet()
+        cachedHiddenItemIds = res
+        return res
     }
 
     fun hideMultipleItems(ids: Collection<String>) {
         val current = getHiddenItemIds().toMutableSet()
         current.addAll(ids)
+        cachedHiddenItemIds = current
         prefs.edit().putStringSet("admin_hidden_media_ids", current).apply()
     }
 
@@ -9104,11 +9126,13 @@ class MediaRepository(private val context: Context) {
             current.add(id)
             true
         }
+        cachedHiddenItemIds = current
         prefs.edit().putStringSet("admin_hidden_media_ids", current).apply()
         return isNowHidden
     }
 
     fun unhideAllItems() {
+        cachedHiddenItemIds = emptySet()
         prefs.edit().remove("admin_hidden_media_ids").apply()
     }
 
