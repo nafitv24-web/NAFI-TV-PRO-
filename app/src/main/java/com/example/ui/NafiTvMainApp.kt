@@ -500,7 +500,7 @@ fun NafiTvMainApp(
                             val adminPlaylists = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
                             val userPlaylists = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
                             val fbPlaylists = try { repository.fetchPlaylistsFromFirebase() } catch (_: Exception) { emptyList() }
-                            val allPlaylists = (adminPlaylists + userPlaylists + fbPlaylists + initialPlaylists)
+                            val allPlaylists = (fbPlaylists + adminPlaylists + userPlaylists + initialPlaylists)
                                 .distinctBy { it.id }
                                 .filterNot { deleted.contains(it.id) }
 

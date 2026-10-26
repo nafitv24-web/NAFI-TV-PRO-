@@ -238,6 +238,7 @@ fun AdminControlAppScreen(
     var editPlaylistLogoUrl by remember { mutableStateOf("") }
     var editPlaylistDescription by remember { mutableStateOf("") }
     var playlistToDelete by remember { mutableStateOf<PlaylistInfo?>(null) }
+    var isSyncingPlaylists by remember { mutableStateOf(false) }
 
     // Admin Search & Filter States
     var channelAdminSearchQuery by remember { mutableStateOf("") }
@@ -3888,7 +3889,7 @@ fun AdminControlAppScreen(
                                         )
                                         repository.saveAdminPlaylist(newPl)
                                         coroutineScope.launch {
-                                            repository.pushPlaylistToFirebase(newPl)
+                                            val ok = repository.pushPlaylistToFirebase(newPl)
                                             if (isMovie) {
                                                 try {
                                                     val movies = repository.fetchPlaylistMoviesOnly(newPl, forceRefresh = true)
@@ -3898,13 +3899,19 @@ fun AdminControlAppScreen(
                                                     }
                                                 } catch (_: Exception) {}
                                             }
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ '${newPl.title}' ফায়ারবেস ক্লাউডে সফলভাবে সেভ ও পাবলিশ হয়েছে!", Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    Toast.makeText(context, "⚠️ লোকাল সেভ হয়েছে, ফায়ারবেস কানেকশন চেক করুন", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         }
-                                        onDataChanged()
                                         playlistTitle = ""
                                         playlistUrl = ""
                                         playlistLogoUrl = ""
                                         playlistDescription = ""
-                                        Toast.makeText(context, "প্লেলিস্ট যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -4021,6 +4028,58 @@ fun AdminControlAppScreen(
                                         labelColor = Color(0xFF94A3B8)
                                     )
                                 )
+                            }
+
+                            // Cloud Sync Bar
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFF0F172A),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.CloudDone, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Firebase ক্লাউড ডেটাবেস সিঙ্ক", color = Color(0xFFE2E8F0), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            if (!isSyncingPlaylists) {
+                                                isSyncingPlaylists = true
+                                                coroutineScope.launch {
+                                                    try {
+                                                        val fetched = repository.fetchPlaylistsFromFirebase()
+                                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                            onDataChanged()
+                                                            Toast.makeText(context, "✅ ফায়ারবেস থেকে ${fetched.size}টি প্লেলিস্ট সফলভাবে রিফ্রেশ হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                            Toast.makeText(context, "সিঙ্ক ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } finally {
+                                                        isSyncingPlaylists = false
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isSyncingPlaylists,
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.height(34.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Sync, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(if (isSyncingPlaylists) "সিঙ্ক হচ্ছে..." else "রিফ্রেশ সিঙ্ক", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                             }
                         }
                     }
@@ -5831,57 +5890,7 @@ fun AdminControlAppScreen(
         )
     }
 
-    // Dialog for Deleting Playlist (Confirmation)
-    if (playlistToDelete != null) {
-        val target = playlistToDelete!!
-        AlertDialog(
-            onDismissRequest = { playlistToDelete = null },
-            containerColor = Color(0xFF1E293B),
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(24.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("প্লেলিস্ট ডিলিট নিশ্চিতকরণ", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-            },
-            text = {
-                Text(
-                    text = "আপনি কি '${target.title}' প্লেলিস্টটি স্থায়ীভাবে ডিলিট করতে চান?",
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 13.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val toRemove = target
-                        playlistToDelete = null
-                        coroutineScope.launch {
-                            repository.deletePlaylist(toRemove.id)
-                            onDataChanged()
-                            Toast.makeText(context, "${toRemove.title} প্লেলিস্ট ডিলিট করা হয়েছে!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444), contentColor = Color.White),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Delete", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick = { playlistToDelete = null },
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF475569))
-                ) {
-                    Text("Cancel", fontSize = 12.sp)
-                }
-            }
-        )
-    }
+
 
     // =========================================================================
     // FULL MATCH & MULTI-SERVER EDIT DIALOG (CRITICAL USER REQUIREMENT)
@@ -6982,6 +6991,8 @@ fun AdminControlAppScreen(
                                     )
 
                                     repository.saveAdminPlaylist(updatedPl)
+                                    repository.clearPlaylistChannelsCache(updatedPl.id)
+
                                     if (target.id == "pl_nafi_movies_json" || target.title.contains("movie", ignoreCase = true) || target.url.contains("movie", ignoreCase = true) || target.type.equals("JSON", ignoreCase = true)) {
                                         repository.saveMoviesM3uUrl(updatedPl.url)
                                         moviesM3uInput = updatedPl.url
@@ -6989,12 +7000,32 @@ fun AdminControlAppScreen(
                                             repository.pushAppConfigToFirebase(moviesM3u = updatedPl.url)
                                         }
                                     }
+                                    if (target.id == "pl_nafi_live_tv" || target.title.contains("live tv", ignoreCase = true)) {
+                                        repository.saveLiveTvM3uUrl(updatedPl.url)
+                                        coroutineScope.launch {
+                                            repository.pushAppConfigToFirebase(liveTvM3u = updatedPl.url)
+                                        }
+                                    }
+                                    if (target.id == "pl_nafi_sports_main" || target.id == "pl_sonyliv_sports" || target.title.contains("sports", ignoreCase = true)) {
+                                        repository.saveSportsM3uUrl(updatedPl.url)
+                                        coroutineScope.launch {
+                                            repository.pushAppConfigToFirebase(sportsM3u = updatedPl.url)
+                                        }
+                                    }
+
                                     coroutineScope.launch {
-                                        repository.pushPlaylistToFirebase(updatedPl)
+                                        val ok = repository.pushPlaylistToFirebase(updatedPl)
+                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                            onDataChanged()
+                                            if (ok) {
+                                                Toast.makeText(context, "✅ '${updatedPl.title}' ফায়ারবেস ক্লাউডে সফলভাবে সেভ ও আপডেট হয়েছে!", Toast.LENGTH_LONG).show()
+                                            } else {
+                                                Toast.makeText(context, "⚠️ লোকাল সেভ হয়েছে, ফায়ারবেস ক্লাউড কানেকশন চেক করুন", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
                                     onDataChanged()
                                     editingPlaylistItem = null
-                                    Toast.makeText(context, "${updatedPl.title} প্লেলিস্ট সফলভাবে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(context, "প্লেলিস্টের নাম এবং M3U URL উভয়ই পূরণ করুন", Toast.LENGTH_SHORT).show()
                                 }

@@ -1,41 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Public read and write for live TV, sports schedules, playlists, news ticker, and notifications
-    match /settings/{docId} {
-      allow read, write: if true;
-    }
-
-    match /app_config/{docId} {
-      allow read, write: if true;
-    }
-
-    match /sports/{sportId} {
-      allow read, write: if true;
-    }
-
-    match /playlists/{playlistId} {
-      allow read, write: if true;
-    }
-
-    match /movie_playlists/{playlistId} {
-      allow read, write: if true;
-    }
-
-    match /movies/{movieId} {
-      allow read, write: if true;
-    }
-
-    match /xtream_accounts/{accId} {
-      allow read, write: if true;
-    }
-
-    match /notifications/{notifId} {
-      allow read, write: if true;
-    }
-
-    match /users/{userId}/{document=**} {
+    // Allow public read and write for all app collections
+    match /{document=**} {
       allow read, write: if true;
     }
   }
 }
+
