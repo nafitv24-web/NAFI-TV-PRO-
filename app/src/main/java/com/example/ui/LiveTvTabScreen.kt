@@ -102,24 +102,36 @@ fun LiveTvTabScreen(
     val firstChannelFocusRequester = remember { FocusRequester() }
 
     // Instantaneous 0ms channel preparation from incoming channels
-    var isAsyncPreparing by remember { mutableStateOf(false) }
-    var preparedChannels by remember { mutableStateOf(channels) }
-    var preparedCategories by remember {
+    val shouldFilterAdult = isAdultHidden || (repository?.isAdultContentHidden() == true)
+    var preparedChannels by remember(channels, shouldFilterAdult) {
+        val initialFiltered = if (shouldFilterAdult && repository != null) {
+            channels.filterNot { repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
+        } else if (shouldFilterAdult) {
+            val adultWords = listOf("adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "porn", "sex", "sensual", "mature", "brazzers", "playboy", "hustler", "for adults")
+            channels.filterNot { ch ->
+                val txt = "${ch.title} ${ch.category} ${ch.genre ?: ""}".lowercase()
+                adultWords.any { txt.contains(it) }
+            }
+        } else {
+            channels
+        }
+        mutableStateOf(initialFiltered)
+    }
+    var preparedCategories by remember(preparedChannels) {
         mutableStateOf(
-            listOf("ALL", "FAVORITE") + channels.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct()
+            listOf("ALL", "FAVORITE") + preparedChannels.mapNotNull { it.category?.takeIf { c -> c.isNotBlank() } }.distinct()
         )
     }
+    var isAsyncPreparing by remember { mutableStateOf(false) }
 
-    LaunchedEffect(channels, isAdultHidden, repository) {
+    LaunchedEffect(channels, shouldFilterAdult, repository) {
         if (channels.isEmpty()) {
             preparedChannels = emptyList()
             preparedCategories = listOf("ALL")
-            isAsyncPreparing = false
             return@LaunchedEffect
         }
         withContext(Dispatchers.Default) {
             val merged = mergeChannelsWithServers(channels)
-            val shouldFilterAdult = isAdultHidden || (repository?.isAdultContentHidden() == true)
             val adultFiltered = if (shouldFilterAdult && repository != null) {
                 merged.filterNot { repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
             } else if (shouldFilterAdult) {
@@ -136,7 +148,6 @@ fun LiveTvTabScreen(
             withContext(Dispatchers.Main) {
                 preparedChannels = adultFiltered
                 preparedCategories = cats
-                isAsyncPreparing = false
             }
         }
     }

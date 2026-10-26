@@ -919,7 +919,7 @@ fun NafiTvMainApp(
                                     Column {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
-                                                text = "NAFI TV 24",
+                                                text = "NAFI TV Pro",
                                                 color = Color.White,
                                                 fontSize = 16.sp,
                                                 fontWeight = FontWeight.Bold
@@ -1358,7 +1358,7 @@ fun NafiTvMainApp(
                                     Column {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
-                                                text = "NAFI TV 24",
+                                                text = "NAFI TV Pro",
                                                 color = Color.White,
                                                 fontSize = 17.sp,
                                                 fontWeight = FontWeight.Bold
@@ -1874,7 +1874,7 @@ fun NafiTvMainApp(
             },
             text = {
                 Text(
-                    text = "আপনি কি নিশ্চিতভাবে NAFI TV 24 অ্যাপটি বন্ধ করতে চান?",
+                    text = "আপনি কি নিশ্চিতভাবে NAFI TV Pro অ্যাপটি বন্ধ করতে চান?",
                     color = Color(0xFF94A3B8),
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center,
@@ -3012,7 +3012,7 @@ fun MenuScreen(
                         )
                         Column {
                             Text(
-                                text = "NAFI TV 24",
+                                text = "NAFI TV Pro",
                                 color = Color.White,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold
@@ -3027,7 +3027,7 @@ fun MenuScreen(
                     }
 
                     Text(
-                        text = "NAFI TV 24 is a full-featured Live TV, Sports & M3U Media Streaming application. Features include custom HLS stream decoding, auto-failover servers, mobile & TV remote compatible layouts, M3U file upload parsing, and live matchup countdowns.",
+                        text = "NAFI TV Pro is a full-featured Live TV, Sports & M3U Media Streaming application. Features include custom HLS stream decoding, auto-failover servers, mobile & TV remote compatible layouts, M3U file upload parsing, and live matchup countdowns.",
                         color = Color(0xFF94A3B8),
                         fontSize = 12.sp,
                         lineHeight = 18.sp

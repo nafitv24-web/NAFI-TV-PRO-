@@ -228,7 +228,7 @@ fun AppUpdateDialog(
                 )
 
                 Text(
-                    text = "NAFI TV 24 এর নতুন ও উন্নত ভার্সন উপলব্ধ",
+                    text = "NAFI TV Pro এর নতুন ও উন্নত ভার্সন উপলব্ধ",
                     color = Color(0xFF94A3B8),
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,

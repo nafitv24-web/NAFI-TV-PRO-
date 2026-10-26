@@ -197,7 +197,7 @@ fun ModeSelectionScreen(
 
                     Column {
                         Text(
-                            text = "NAFI TV24",
+                            text = "NAFI TV Pro",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 1.sp,
@@ -263,7 +263,7 @@ fun ModeSelectionScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "NAFI TV24",
+                        text = "NAFI TV Pro",
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.2.sp,

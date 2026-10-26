@@ -2952,7 +2952,7 @@ fun VideoPlayerScreen(
                     }
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "NAFI TV 24",
+                        text = "NAFI TV Pro",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
@@ -5004,7 +5004,7 @@ private fun PlayerBufferingLogoOverlay(
 
                 // Subtitle Badge
                 Text(
-                    text = "NAFI TV 24 • অটো অ্যাডাপটিভ স্ট্রিমিং",
+                    text = "NAFI TV Pro • অটো অ্যাডাপটিভ স্ট্রিমিং",
                     color = Color(0xFF94A3B8),
                     fontSize = if (isCompact) 9.sp else 10.sp,
                     fontWeight = FontWeight.Normal

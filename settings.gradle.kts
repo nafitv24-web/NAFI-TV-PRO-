@@ -22,7 +22,7 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "NAFI TV 24"
+rootProject.name = "NAFI TV Pro"
 
 include(":app")
 // Desktop module is configured with its own standalone Gradle runner for Windows .exe builds
