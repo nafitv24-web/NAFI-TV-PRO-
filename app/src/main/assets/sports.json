@@ -1,0 +1,113 @@
+{
+  "categories": [
+    {
+      "category_name": "Cricket",
+      "movies": [
+        {
+          "title": "T Sports Live HD (Live Match)",
+          "poster": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSfI7gq02p8B48Fq62Ua6zRj9Yg94A6P9Z4wQ&s",
+          "description": "T Sports Live Cricket & Football Coverage",
+          "category": "Cricket",
+          "status": "LIVE",
+          "tournament": "Live Sports 2026",
+          "team1": "Live Match",
+          "team2": "T Sports",
+          "sources": [
+            { "server_name": "T Sports Server 1", "url": "http://103.151.60.162:2122/play/a030/index.m3u8?hls" },
+            { "server_name": "T Sports Server 2", "url": "https://tvsen5.aynaott.com/TnMn5kZz8aLmjkl/tracks-v1a1/mono.ts.m3u8" },
+            { "server_name": "T Sports Server 3", "url": "https://tv.kbhub.online/Live-Event-Sports/PTV.m3u8" }
+          ]
+        },
+        {
+          "title": "Sony Ten 1 HD (Live Cricket)",
+          "poster": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Sony_LIV_logo.svg/320px-Sony_LIV_logo.svg.png",
+          "description": "Sony Sports Network Live Event",
+          "category": "Cricket",
+          "status": "LIVE",
+          "tournament": "Bilateral Series 2026",
+          "team1": "Live",
+          "team2": "Sony Sports",
+          "sources": [
+            { "server_name": "Sony Sports HD", "url": "https://sonydaime.akamaized.net/hls/live/2120301/criclive2610/HIN/std_lrh-800300010.m3u8" },
+            { "server_name": "Sony Backup", "url": "https://tvsen5.aynaott.com/TnMn5kZz8aLmjkl/tracks-v1a1/mono.ts.m3u8" }
+          ]
+        },
+        {
+          "title": "Willow Cricket Live",
+          "poster": "https://upload.wikimedia.org/wikipedia/en/thumb/a/ae/Willow_TV_logo.svg/330px-Willow_TV_logo.svg.png",
+          "description": "Willow TV Live 24/7 Cricket Matches",
+          "category": "Cricket",
+          "status": "LIVE",
+          "tournament": "ICC & T20 Leagues",
+          "team1": "Live Cricket",
+          "team2": "Willow HD",
+          "sources": [
+            { "server_name": "Willow HD", "url": "https://tv.kbhub.online/Live-Event-Sports/PTV.m3u8" },
+            { "server_name": "Willow Stream 2", "url": "http://103.151.60.162:2122/play/a030/index.m3u8?hls" }
+          ]
+        },
+        {
+          "title": "PTV Sports HD (Live Event)",
+          "poster": "https://upload.wikimedia.org/wikipedia/en/thumb/3/36/PTV_Sports_logo.png/250px-PTV_Sports_logo.png",
+          "description": "PTV Sports Official Live Stream",
+          "category": "Cricket",
+          "status": "LIVE",
+          "tournament": "International Cricket",
+          "team1": "Live Sports",
+          "team2": "PTV HD",
+          "sources": [
+            { "server_name": "PTV Sports HD", "url": "https://tv.kbhub.online/Live-Event-Sports/PTV.m3u8" }
+          ]
+        },
+        {
+          "title": "Star Sports 1 Hindi HD",
+          "poster": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Disney%2B_Hotstar_logo.svg/320px-Disney%2B_Hotstar_logo.svg.png",
+          "description": "Star Sports 1 Hindi Live Match",
+          "category": "Cricket",
+          "status": "LIVE",
+          "tournament": "Cricket Tour 2026",
+          "team1": "Cricket Match",
+          "team2": "Star Sports",
+          "sources": [
+            { "server_name": "Star Sports Server 1", "url": "http://103.151.60.162:2122/play/a030/index.m3u8?hls" },
+            { "server_name": "Star Sports Server 2", "url": "https://tvsen5.aynaott.com/TnMn5kZz8aLmjkl/tracks-v1a1/mono.ts.m3u8" }
+          ]
+        }
+      ]
+    },
+    {
+      "category_name": "Football",
+      "movies": [
+        {
+          "title": "All NAFI FOOTBALL ⚽",
+          "poster": "https://i.supaimg.com/83afe636-c743-4025-87ea-6f9f3f10d71f/91012331-e0b1-42fb-87c0-23c1137f9d0d.png",
+          "description": "European Football, Champions League & Leagues",
+          "category": "Football",
+          "status": "LIVE",
+          "tournament": "Football 2026",
+          "team1": "Home Team",
+          "team2": "Away Team",
+          "sources": [
+            { "server_name": "Football Server 1", "url": "http://103.151.60.162:2122/play/a030/index.m3u8?hls" },
+            { "server_name": "Football Server 2", "url": "https://tvsen5.aynaott.com/TnMn5kZz8aLmjkl/tracks-v1a1/mono.ts.m3u8" },
+            { "server_name": "Football Server 3", "url": "https://dash3.antik.sk/live/test_golf_channel/playlist.m3u8" }
+          ]
+        },
+        {
+          "title": "Eurosport HD Football",
+          "poster": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ad/Eurosport_1_2015.svg/320px-Eurosport_1_2015.svg.png",
+          "description": "Eurosport Live Football & Sports",
+          "category": "Football",
+          "status": "LIVE",
+          "tournament": "European League",
+          "team1": "Eurosport",
+          "team2": "Live",
+          "sources": [
+            { "server_name": "Eurosport Server 1", "url": "https://dash3.antik.sk/live/test_golf_channel/playlist.m3u8" },
+            { "server_name": "Eurosport Server 2", "url": "http://103.151.60.162:2122/play/a030/index.m3u8?hls" }
+          ]
+        }
+      ]
+    }
+  ]
+}

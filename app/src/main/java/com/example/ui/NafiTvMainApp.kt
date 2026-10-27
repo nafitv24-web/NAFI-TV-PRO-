@@ -396,13 +396,23 @@ fun NafiTvMainApp(
                         }
                     }
 
-                    // ২. লাইভ ইভেন্ট / খেলাধুলা সমান্তরাল লোডিং (Live Events - Only from Admin Sports Match Playlists & APIs)
+                    // ২. লাইভ ইভেন্ট / খেলাধুলা সমান্তরাল লোডিং (Live Events - Admin Sports Matches + Sports TV Channels)
                     launch {
                         try {
                             withContext(Dispatchers.Main) { currentLoadingStage = LoadingStage.LIVE_EVENTS }
                             val adminPlaylistsSports = repository.fetchAllAdminPlaylistsSports()
-                            withContext(Dispatchers.Main) {
-                                sportsList = adminPlaylistsSports
+                            val defaultSports = repository.getDefaultBuiltinSports()
+                            val mergedSports = if (adminPlaylistsSports.isNotEmpty()) {
+                                (adminPlaylistsSports + defaultSports).distinctBy { it.id }
+                            } else if (sportsList.isNotEmpty()) {
+                                (sportsList + defaultSports).distinctBy { it.id }
+                            } else {
+                                defaultSports
+                            }
+                            if (mergedSports.isNotEmpty()) {
+                                withContext(Dispatchers.Main) {
+                                    sportsList = mergedSports
+                                }
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -3674,6 +3684,7 @@ fun EventsScreen(
                     }
                 }
             }
+        } else {
             var globalEventsTick by remember { mutableLongStateOf(0L) }
             LaunchedEffect(Unit) {
                 while (isActive) {

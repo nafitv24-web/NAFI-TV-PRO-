@@ -679,7 +679,23 @@ class MediaRepository(private val context: Context) {
 
     // Built-in starter items for instant presentation on first launch
     fun getDefaultBuiltinSports(): List<MediaItem> {
-        return emptyList()
+        val allTv = getDefaultBuiltinLiveTv()
+        return allTv.filter { tv ->
+            val cat = tv.category.lowercase()
+            val title = tv.title.lowercase()
+            cat.contains("sport") || cat.contains("cricket") || cat.contains("football") ||
+            title.contains("sport") || title.contains("cricket") || title.contains("football") ||
+            title.contains("t sports") || title.contains("willow") || title.contains("ten sports") ||
+            title.contains("sony ten") || title.contains("star sports") || title.contains("a sports") ||
+            title.contains("ptv sports") || title.contains("euro sport")
+        }.map {
+            it.copy(
+                type = MediaType.LIVE_EVENT,
+                category = if (it.category.isBlank() || it.category.equals("LIVE_TV", ignoreCase = true) || it.category.equals("BANGLADESH", ignoreCase = true)) "Sports" else it.category,
+                isLive = true,
+                status = "LIVE"
+            )
+        }
     }
 
     fun getDefaultBuiltinLiveTv(): List<MediaItem> {
@@ -891,7 +907,8 @@ class MediaRepository(private val context: Context) {
         val customSports = getCustomStreams().filter { it.type == MediaType.LIVE_EVENT }.filterNot { isItemDeleted(it) || isDemoChannel(it) }.map { it.copy(isAdminAdded = true) }
         val cachedAdmin = getCachedAdminLiveEvents().filterNot { isItemDeleted(it) || isDemoChannel(it) }.map { it.copy(isAdminAdded = true) }
         val cached = getCachedSportsMatches().filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val baseList = if (cached.isNotEmpty()) cached else getDefaultBuiltinSports()
+        val builtin = getDefaultBuiltinSports().filterNot { isItemDeleted(it) || isDemoChannel(it) }
+        val baseList = (cached + builtin).distinctBy { it.id }
 
         // Admin matches (custom + cached admin from Firebase) ALWAYS come first (সবার আগে)!
         val adminMatches = (customSports + cachedAdmin).distinctBy { it.id }
@@ -5773,6 +5790,7 @@ class MediaRepository(private val context: Context) {
             allSports.addAll(customSports)
             allSports.addAll(sportsM3u)
             allSports.addAll(tapmad)
+            allSports.addAll(getDefaultBuiltinSports())
         }
 
         val filtered = allSports.distinctBy { it.id }.filterNot { deleted.contains(it.id) || isItemDeleted(it) }

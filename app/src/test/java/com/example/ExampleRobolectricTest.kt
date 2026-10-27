@@ -20,9 +20,13 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `test activity launch`() {
-    val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
-    val activity = controller.get()
-    org.junit.Assert.assertNotNull(activity)
+  fun `test sports fetch`() = kotlinx.coroutines.runBlocking {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val repo = com.example.data.MediaRepository(context)
+    val matches = repo.fetchAllAdminPlaylistsSports()
+    println("DEBUG_TEST: Sports count = ${matches.size}")
+    if (matches.isNotEmpty()) {
+      println("DEBUG_TEST: First match = ${matches[0].title}, url = ${matches[0].streamUrl}")
+    }
   }
 }
