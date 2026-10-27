@@ -48,6 +48,8 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                 repo.getCachedMoviesList()
                 repo.getDeletedIds()
                 repo.getInitialPlaylists()
+                // Automatic storage & cache hygiene on startup to prevent bloat
+                com.example.util.StorageCleaner.cleanOnStartup(this@NafiTvApp)
             } catch (_: Exception) {}
         }
 
@@ -114,7 +116,7 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         val isLowRam = isLowRamEnvironment()
         // On 512MB RAM phones, keep memory cache to 5% of heap to prevent LMK kills
         val memCachePercent = if (isLowRam) 0.05 else 0.15
-        val diskCacheMaxBytes = if (isLowRam) 25L * 1024 * 1024 else 100L * 1024 * 1024
+        val diskCacheMaxBytes = if (isLowRam) 15L * 1024 * 1024 else 25L * 1024 * 1024
 
         return ImageLoader.Builder(this)
             .okHttpClient(sharedOkHttpClient)
@@ -183,7 +185,7 @@ class NafiTvApp : Application(), ImageLoaderFactory {
             val keepAliveDuration = if (isLowRam) 30L else 120L
 
             val cacheDirectory = File(instance.cacheDir, "nafitv_http_cache")
-            val cacheSize = if (isLowRam) 20L * 1024 * 1024 else 60L * 1024 * 1024
+            val cacheSize = if (isLowRam) 5L * 1024 * 1024 else 12L * 1024 * 1024
 
             OkHttpClient.Builder()
                 .cache(okhttp3.Cache(cacheDirectory, cacheSize))

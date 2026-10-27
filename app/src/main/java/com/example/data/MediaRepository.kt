@@ -119,6 +119,15 @@ class MediaRepository(private val context: Context) {
         @Volatile var cachedBuiltinLiveTv: List<MediaItem>? = null
         @Volatile var cachedBuiltinMovies: List<MediaItem>? = null
         @Volatile var cachedCustomStreams: List<MediaItem>? = null
+        @Volatile var cachedBuiltinSports: List<MediaItem>? = null
+
+        fun clearMemoryCaches() {
+            memoryFileCache.clear()
+            cachedBuiltinLiveTv = null
+            cachedBuiltinMovies = null
+            cachedCustomStreams = null
+            cachedBuiltinSports = null
+        }
     }
 
     fun getMarqueeTickerText(): String {
@@ -520,14 +529,15 @@ class MediaRepository(private val context: Context) {
         return obj
     }
 
-    // Fast & Safe Local File Cache (Streaming JSON storage - no 800 item limit, zero memory bloat)
+    // Fast & Safe Local File Cache (Stored in context.cacheDir/media_cache, capped to 400 items, zero memory bloat)
     private fun saveListToFileCache(fileName: String, list: List<MediaItem>) {
-        val itemsToSave = list
-        memoryFileCache[fileName] = itemsToSave
+        val itemsToSave = list.take(400) // Keep disk cache footprint minimal (< 200KB per file)
+        memoryFileCache[fileName] = list
         cacheWriteExecutor.execute {
             try {
-                val file = java.io.File(context.filesDir, fileName)
-                val tempFile = java.io.File(context.filesDir, "$fileName.tmp")
+                val mediaCacheDir = java.io.File(context.cacheDir, "media_cache").apply { if (!exists()) mkdirs() }
+                val file = java.io.File(mediaCacheDir, fileName)
+                val tempFile = java.io.File(mediaCacheDir, "$fileName.tmp")
                 tempFile.bufferedWriter(Charsets.UTF_8).use { writer ->
                     writer.write("[\n")
                     itemsToSave.forEachIndexed { index, item ->
@@ -547,6 +557,11 @@ class MediaRepository(private val context: Context) {
                     if (file.exists()) file.delete()
                     tempFile.renameTo(file)
                 }
+                // Cleanup legacy version from filesDir if it was there
+                try {
+                    val oldInFiles = java.io.File(context.filesDir, fileName)
+                    if (oldInFiles.exists()) oldInFiles.delete()
+                } catch (_: Exception) {}
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -558,7 +573,9 @@ class MediaRepository(private val context: Context) {
         if (inMemory != null) {
             return inMemory.filterNot { isItemDeleted(it) }
         }
-        val file = java.io.File(context.filesDir, fileName)
+        val mediaCacheDir = java.io.File(context.cacheDir, "media_cache")
+        val cacheFile = java.io.File(mediaCacheDir, fileName)
+        val file = if (cacheFile.exists()) cacheFile else java.io.File(context.filesDir, fileName)
         if (!file.exists()) return emptyList()
         val list = mutableListOf<MediaItem>()
         try {
@@ -677,7 +694,6 @@ class MediaRepository(private val context: Context) {
         saveListToFileCache("cache_movies_v2.json", list.filterNot { isDemoChannel(it) })
     }
 
-    private var cachedBuiltinSports: List<MediaItem>? = null
 
     // Built-in starter items for instant presentation on first launch
     fun getDefaultBuiltinSports(): List<MediaItem> {

@@ -2195,6 +2195,16 @@ fun MenuScreen(
     // 5. Reset Defaults Dialog
     var showResetConfirmDialog by remember { mutableStateOf(false) }
 
+    // 6. Storage & Cache State
+    var cacheSizeBytes by remember { mutableStateOf(0L) }
+    var isCleaningCache by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            cacheSizeBytes = com.example.util.StorageCleaner.calculateTotalStorageBytes(context)
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -2468,6 +2478,123 @@ fun MenuScreen(
                 }
             }
         }
+
+        // CARD 0.5: 🧹 Storage & Cache Cleaner (ক্যাশ ও অপ্রয়োজনীয় মেমোরি ক্লিয়ার)
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.15f),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CleaningServices,
+                                        contentDescription = "Storage Cleaner",
+                                        tint = Color(0xFF34D399),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "🧹 স্টোরেজ ও ক্যাশ ক্লিনার",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "বর্তমান ক্যাশ ও টেম্প সাইজ: ${com.example.util.StorageCleaner.formatBytes(cacheSizeBytes)}",
+                                    color = Color(0xFF34D399),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "ইমেজ থাম্বনেইল, প্লেলিস্ট ক্যাশ ও পুরনো আপডেট ফাইল পরিষ্কার করুন। এতে ফোন মেমোরি খালি হবে এবং কম র‍্যামের ফোনেও অ্যাপ দ্রুত চলবে। কোনো ডাউনলোড মুভি বা চ্যানেল ডিলিট হবে না।",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            if (!isCleaningCache) {
+                                isCleaningCache = true
+                                coroutineScope.launch {
+                                    val freed = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        com.example.util.StorageCleaner.cleanAppCacheAndTempFiles(context)
+                                    }
+                                    cacheSizeBytes = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        com.example.util.StorageCleaner.calculateTotalStorageBytes(context)
+                                    }
+                                    isCleaningCache = false
+                                    Toast.makeText(
+                                        context,
+                                        "✅ সফলভাবে ক্যাশ পরিষ্কার করা হয়েছে! ${com.example.util.StorageCleaner.formatBytes(freed)} জায়গা খালি হয়েছে।",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        },
+                        enabled = !isCleaningCache,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF059669),
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                    ) {
+                        if (isCleaningCache) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("ক্যাশ পরিষ্কার হচ্ছে...", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteSweep,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "এক ক্লিকে ক্যাশ ক্লিয়ার করুন (Clear Cache)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // CARD 1: Play Direct Stream Link (HLS / DASH / MP4)
         item {
             Card(
