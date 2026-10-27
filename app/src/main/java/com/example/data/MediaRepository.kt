@@ -677,10 +677,20 @@ class MediaRepository(private val context: Context) {
         saveListToFileCache("cache_movies_v2.json", list.filterNot { isDemoChannel(it) })
     }
 
+    private var cachedBuiltinSports: List<MediaItem>? = null
+
     // Built-in starter items for instant presentation on first launch
     fun getDefaultBuiltinSports(): List<MediaItem> {
+        cachedBuiltinSports?.let { return it }
+        val assetSports = try {
+            val jsonString = context.assets.open("sports.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            parseMediaFromJsonString(jsonString, defaultCategory = "Cricket", defaultType = MediaType.LIVE_EVENT).map {
+                it.copy(type = MediaType.LIVE_EVENT, isLive = true, status = "LIVE")
+            }
+        } catch (_: Exception) { emptyList() }
+
         val allTv = getDefaultBuiltinLiveTv()
-        return allTv.filter { tv ->
+        val sportsTv = allTv.filter { tv ->
             val cat = tv.category.lowercase()
             val title = tv.title.lowercase()
             cat.contains("sport") || cat.contains("cricket") || cat.contains("football") ||
@@ -690,12 +700,16 @@ class MediaRepository(private val context: Context) {
             title.contains("ptv sports") || title.contains("euro sport")
         }.map {
             it.copy(
+                id = if (it.id.startsWith("sp_")) it.id else "sp_${it.id}",
                 type = MediaType.LIVE_EVENT,
                 category = if (it.category.isBlank() || it.category.equals("LIVE_TV", ignoreCase = true) || it.category.equals("BANGLADESH", ignoreCase = true)) "Sports" else it.category,
                 isLive = true,
                 status = "LIVE"
             )
         }
+        val combined = (assetSports + sportsTv).distinctBy { it.id }
+        cachedBuiltinSports = combined
+        return combined
     }
 
     fun getDefaultBuiltinLiveTv(): List<MediaItem> {
@@ -4643,7 +4657,7 @@ class MediaRepository(private val context: Context) {
 
     suspend fun fetchAllXtreamMoviesFast(): List<MediaItem> = withContext(Dispatchers.IO) {
         val cached = getCachedMoviesList()
-        if (cached.isNotEmpty() && cached.size > 2000) {
+        if (cached.isNotEmpty()) {
             return@withContext cached
         }
         fetchAllXtreamMoviesAndSeries()

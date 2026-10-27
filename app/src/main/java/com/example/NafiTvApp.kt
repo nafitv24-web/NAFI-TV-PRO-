@@ -64,6 +64,10 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     throwable is java.util.concurrent.TimeoutException ||
                     throwable is java.net.SocketTimeoutException ||
                     throwable is java.io.IOException ||
+                    throwable is java.lang.IllegalArgumentException ||
+                    throwable is java.lang.IllegalStateException ||
+                    throwable is java.lang.NullPointerException ||
+                    throwable is java.lang.IndexOutOfBoundsException ||
                     msg.contains("MediaCodec", ignoreCase = true) ||
                     msg.contains("Surface", ignoreCase = true) ||
                     msg.contains("DeadObject", ignoreCase = true) ||
@@ -71,7 +75,8 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     msg.contains("EGL", ignoreCase = true) ||
                     msg.contains("GLES", ignoreCase = true) ||
                     msg.contains("TextureView", ignoreCase = true) ||
-                    msg.contains("ViewRootImpl", ignoreCase = true)
+                    msg.contains("ViewRootImpl", ignoreCase = true) ||
+                    msg.contains("Key was already used", ignoreCase = true)
 
             if (thread != Looper.getMainLooper().thread || isRecoverable) {
                 // Recoverable / background error -> ignore & recover to keep app alive
@@ -85,8 +90,12 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     } catch (_: Throwable) {}
                 }
             } else {
-                Log.w("NafiTvApp", "Suppressed main thread uncaught exception: ${throwable.message}")
-                defaultHandler?.uncaughtException(thread, throwable)
+                Log.w("NafiTvApp", "Suppressed main thread uncaught exception safely: ${throwable.message}")
+                try {
+                    Looper.loop()
+                } catch (_: Throwable) {
+                    defaultHandler?.uncaughtException(thread, throwable)
+                }
             }
         }
     }

@@ -3685,23 +3685,17 @@ fun EventsScreen(
                 }
             }
         } else {
-            var globalEventsTick by remember { mutableLongStateOf(0L) }
-            LaunchedEffect(Unit) {
-                while (isActive) {
-                    kotlinx.coroutines.delay(1000L)
-                    globalEventsTick++
-                }
-            }
-
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filteredSports, key = { it.id }) { sport ->
+                itemsIndexed(
+                    filteredSports,
+                    key = { index, sport -> if (sport.id.isNotBlank()) "${sport.id}_$index" else "sport_$index" }
+                ) { _, sport ->
                     LiveEventMatchCard(
                         sport = sport,
-                        tickCount = globalEventsTick,
                         isTvMode = isTvMode,
                         onSelectMedia = onSelectMedia
                     )
@@ -3724,10 +3718,13 @@ fun LiveEventMatchCard(
     var isCardFocused by remember { mutableStateOf(false) }
     var showNoLinkDialog by remember { mutableStateOf(false) }
 
-    // Unified ticking ticker guarantee (reuses parent globalEventsTick if supplied)
+    // High performance local ticker: Only ticks if event is an upcoming match with a future countdown
     var localTick by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(sport.id, tickCount) {
-        if (tickCount <= 0L) {
+    val isStaticLive = sport.isLive || sport.status.equals("LIVE", ignoreCase = true) || sport.status.contains("LIVE NOW", ignoreCase = true)
+    val hasCountdownTarget = sport.countdownTargetSeconds != null || !sport.matchTimeFormatted.isNullOrBlank() || !sport.eventTime.isNullOrBlank()
+
+    LaunchedEffect(sport.id) {
+        if (!isStaticLive && hasCountdownTarget) {
             while (isActive) {
                 kotlinx.coroutines.delay(1000L)
                 localTick++
@@ -3735,10 +3732,10 @@ fun LiveEventMatchCard(
         }
     }
 
-    val effectiveTick = if (tickCount > 0L) tickCount else localTick
+    val effectiveTick = localTick
     val actualRemainingSecs = calculateEventRemainingSeconds(sport, effectiveTick)
-    val actualIsLive = isEventLiveNow(sport, effectiveTick) || sport.isLive || sport.status.equals("LIVE", ignoreCase = true) || sport.status.contains("LIVE NOW", ignoreCase = true)
-    val isEffectivelyLive = actualIsLive || (actualRemainingSecs <= 0L && (sport.countdownTargetSeconds != null || !sport.matchTimeFormatted.isNullOrBlank() || !sport.eventTime.isNullOrBlank()))
+    val actualIsLive = isStaticLive || isEventLiveNow(sport, effectiveTick)
+    val isEffectivelyLive = actualIsLive || (actualRemainingSecs <= 0L && hasCountdownTarget)
 
     val stageHeader = if (!sport.status.isNullOrBlank() &&
         !sport.status.equals("LIVE", ignoreCase = true) &&
