@@ -3773,23 +3773,15 @@ fun LiveEventMatchCard(
     var showServerSelectDialog by remember { mutableStateOf(false) }
 
     val handlePlayClick: (String?) -> Unit = { targetUrl ->
-        val linkToPlay = targetUrl?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
-        if (!linkToPlay.isNullOrBlank()) {
-            // Direct playback of explicitly chosen server/channel
-            onSelectMedia(sport.copy(streamUrl = linkToPlay))
-        } else if (servers.size > 1) {
-            // Multiple channels available: open channel/server selector dialog
-            showServerSelectDialog = true
-        } else {
-            val fallbackLink = sport.streamUrl.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
-                ?: servers.firstOrNull { it.url.isNotBlank() && !it.url.equals("null", ignoreCase = true) }?.url
+        val chosenUrl = targetUrl?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            ?: sport.streamUrl.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            ?: servers.firstOrNull { it.url.isNotBlank() && !it.url.equals("null", ignoreCase = true) }?.url
 
-            if (!fallbackLink.isNullOrBlank()) {
-                onSelectMedia(sport.copy(streamUrl = fallbackLink))
-            } else {
-                showNoLinkDialog = true
-                Toast.makeText(context, "ম্যাচ শুরু হওয়ার সাথে সাথে চ্যানেল আসবে অপেক্ষা করুন ধন্যবাদ", Toast.LENGTH_SHORT).show()
-            }
+        if (!chosenUrl.isNullOrBlank()) {
+            onSelectMedia(sport.copy(streamUrl = chosenUrl))
+        } else {
+            showNoLinkDialog = true
+            Toast.makeText(context, "ম্যাচ শুরু হওয়ার সাথে সাথে চ্যানেল আসবে অপেক্ষা করুন ধন্যবাদ", Toast.LENGTH_SHORT).show()
         }
     }
 

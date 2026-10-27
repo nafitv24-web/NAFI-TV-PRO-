@@ -1202,13 +1202,9 @@ fun VideoPlayerScreen(
                 val mediaItemBuilder = MediaItem.Builder()
                     .setUri(finalMediaUri)
 
-                val isMp4 = finalCleanUrl.contains(".mp4", ignoreCase = true)
-                val isMkv = finalCleanUrl.contains(".mkv", ignoreCase = true) || isMovieLinkBd
-                val isWebm = finalCleanUrl.contains(".webm", ignoreCase = true)
-                val isTs = (finalCleanUrl.contains(".ts", ignoreCase = true) ||
-                        finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
-                        ((isRgkkw && finalCleanUrl.contains("/live/")) && !finalCleanUrl.contains(".m3u8", ignoreCase = true))) && !isMp4 && !isMkv && !isWebm
-
+                val isMp4 = pathBeforeQuery.endsWith(".mp4") || (!finalCleanUrl.contains(".m3u8", ignoreCase = true) && finalCleanUrl.contains(".mp4", ignoreCase = true))
+                val isMkv = pathBeforeQuery.endsWith(".mkv") || isMovieLinkBd
+                val isWebm = pathBeforeQuery.endsWith(".webm")
                 val isFileHost = finalCleanUrl.contains("pixeldrain", ignoreCase = true) ||
                         finalCleanUrl.contains("pixeldra.in", ignoreCase = true) ||
                         finalCleanUrl.contains("drive.google.com", ignoreCase = true) ||
@@ -1221,12 +1217,21 @@ fun VideoPlayerScreen(
                         drmConfig?.manifestType?.equals("mpd", ignoreCase = true) == true ||
                         currentMedia.manifestType?.equals("mpd", ignoreCase = true) == true
 
-                val isM3u8 = !isFileHost && !isTs && !isMovieLinkBd && !isMovieFormat && (finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
+                val isM3u8 = finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
+                        pathBeforeQuery.endsWith(".m3u8") ||
                         finalCleanUrl.contains("/hls/", ignoreCase = true) ||
                         drmConfig?.manifestType?.equals("hls", ignoreCase = true) == true ||
                         currentMedia.manifestType?.equals("hls", ignoreCase = true) == true ||
                         isToffee ||
-                        ((currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT || currentMedia.isLive) && !isMp4 && !isMkv && !isWebm && !isMpd && !isFileHost))
+                        (!isFileHost && !isMovieFormat && !isMp4 && !isMkv && !isWebm && !isMpd && (
+                                currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT || currentMedia.isLive
+                        ))
+
+                val isTs = !isM3u8 && (
+                        pathBeforeQuery.endsWith(".ts") ||
+                        finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
+                        ((isRgkkw && finalCleanUrl.contains("/live/")) && !finalCleanUrl.contains(".m3u8", ignoreCase = true))
+                ) && !isMp4 && !isMkv && !isWebm
 
                 if (isLiveStream && !isTs) {
                     // Safe target live offset: tuned for HLS/DASH manifest streams
