@@ -523,7 +523,7 @@ fun SeriesDetailsDialog(
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(vertical = 4.dp)
                                 ) {
-                                    itemsIndexed(episodesForCurrentSeason, key = { _, ep -> ep.id }) { index, episode ->
+                                    itemsIndexed(episodesForCurrentSeason, key = { index, ep -> if (ep.id.isNotBlank()) "${ep.id}_$index" else "ep_$index" }) { index, episode ->
                                         EpisodeCardItem(
                                             episode = episode,
                                             parentSeries = loadedSeries,
@@ -911,7 +911,7 @@ fun SeriesDetailsDialog(
                             contentPadding = PaddingValues(vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            itemsIndexed(episodesForCurrentSeason, key = { _, ep -> ep.id }) { index, episode ->
+                            itemsIndexed(episodesForCurrentSeason, key = { index, ep -> if (ep.id.isNotBlank()) "${ep.id}_$index" else "ep_$index" }) { index, episode ->
                                 EpisodeCardItem(
                                     episode = episode,
                                     parentSeries = loadedSeries,

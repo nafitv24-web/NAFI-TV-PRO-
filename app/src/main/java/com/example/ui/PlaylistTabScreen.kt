@@ -131,26 +131,39 @@ fun PlaylistTabScreen(
         val pl = selectedPlaylist
         if (pl != null) {
             val shouldFilterAdult = isAdultHidden || repository.isAdultContentHidden()
-            val cached = repository.getCachedPlaylistChannels(pl.id)
-            if (cached.isNotEmpty()) {
-                playlistChannels = if (shouldFilterAdult) {
-                    cached.filterNot { repository.isDemoChannel(it) || repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
+            // Immediately load from cache on IO dispatcher to avoid UI freeze
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val cached = repository.getCachedPlaylistChannels(pl.id)
+                if (cached.isNotEmpty()) {
+                    val initialFiltered = if (shouldFilterAdult) {
+                        cached.filterNot { repository.isDemoChannel(it) || repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
+                    } else {
+                        cached.filterNot { repository.isDemoChannel(it) }
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        playlistChannels = initialFiltered
+                        isLoadingChannels = false
+                    }
                 } else {
-                    cached.filterNot { repository.isDemoChannel(it) }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        isLoadingChannels = true
+                    }
                 }
-                isLoadingChannels = false
-            } else {
-                isLoadingChannels = true
             }
             channelSearchQuery = ""
             selectedPlaylistTypeFilter = "ALL"
             selectedPlaylistCategory = "All"
             try {
-                val fetched = repository.fetchPlaylistChannels(pl)
-                val filtered = if (shouldFilterAdult) {
-                    fetched.filterNot { repository.isDemoChannel(it) || repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
-                } else {
-                    fetched.filterNot { repository.isDemoChannel(it) }
+                // Maximum 12-second timeout to prevent indefinite loading or ANR
+                val fetched = kotlinx.coroutines.withTimeoutOrNull(12000L) {
+                    repository.fetchPlaylistChannels(pl)
+                } ?: emptyList()
+                val filtered = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    if (shouldFilterAdult) {
+                        fetched.filterNot { repository.isDemoChannel(it) || repository.isMediaHidden(it) || repository.isAdultMedia(it) || repository.isAdultCategory(it.category) }
+                    } else {
+                        fetched.filterNot { repository.isDemoChannel(it) }
+                    }
                 }
                 if (filtered.isNotEmpty() || playlistChannels.isEmpty()) {
                     playlistChannels = filtered
@@ -392,7 +405,7 @@ fun PlaylistTabScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(filteredPlaylists, key = { _, pl -> pl.id }) { index, pl ->
+                    itemsIndexed(filteredPlaylists, key = { index, pl -> if (pl.id.isNotBlank()) "${pl.id}_$index" else "pl_$index" }) { index, pl ->
                         PlaylistGridCard(
                             playlist = pl,
                             index = index,
@@ -556,9 +569,17 @@ fun PlaylistTabScreen(
                     playlistChannels
                 }
             }
-            val liveCount = remember(safePlaylistChannels) { safePlaylistChannels.count { it.type == com.example.model.MediaType.LIVE_TV || it.isLive } }
-            val movieCount = remember(safePlaylistChannels) { safePlaylistChannels.count { it.type == com.example.model.MediaType.MOVIE && !it.isSeries } }
-            val seriesCount = remember(safePlaylistChannels) { safePlaylistChannels.count { it.isSeries || it.type == com.example.model.MediaType.SERIES } }
+            val (liveCount, movieCount, seriesCount) = remember(safePlaylistChannels) {
+                var l = 0
+                var m = 0
+                var s = 0
+                for (ch in safePlaylistChannels) {
+                    if (ch.isSeries || ch.type == com.example.model.MediaType.SERIES) s++
+                    else if (ch.type == com.example.model.MediaType.MOVIE) m++
+                    else if (ch.type == com.example.model.MediaType.LIVE_TV || ch.isLive) l++
+                }
+                Triple(l, m, s)
+            }
             val hasMultipleTypes = (liveCount > 0 && (movieCount > 0 || seriesCount > 0)) || (movieCount > 0 && seriesCount > 0)
 
             if (hasMultipleTypes) {
@@ -721,7 +742,7 @@ fun PlaylistTabScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(filteredChannels, key = { it.id }) { item ->
+                    itemsIndexed(filteredChannels, key = { index, item -> if (item.id.isNotBlank()) "${item.id}_${item.streamUrl.hashCode()}_$index" else "pl_ch_$index" }) { _, item ->
                         var isCardFocused by remember { mutableStateOf(false) }
                         val isActive = ChannelStatusManager.isChannelActive(item)
                         val isMovieOrSeriesItem = item.isSeries || item.type == com.example.model.MediaType.MOVIE || item.type == com.example.model.MediaType.SERIES

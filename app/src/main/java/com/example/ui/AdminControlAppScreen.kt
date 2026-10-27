@@ -2206,7 +2206,7 @@ fun AdminControlAppScreen(
                 }
 
                 // Sports Items List
-                items(adminSportsItems, key = { it.id }) { item ->
+                itemsIndexed(adminSportsItems, key = { idx, item -> if (item.id.isNotBlank()) "${item.id}_$idx" else "adm_sport_$idx" }) { _, item ->
                     Card(
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),

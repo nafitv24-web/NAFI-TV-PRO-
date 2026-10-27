@@ -1224,13 +1224,14 @@ class MediaRepository(private val context: Context) {
 
                         if (innerArr != null && innerArr.length() > 0) {
                             for (j in 0 until innerArr.length()) {
+                                if (items.size >= 2500) break
                                 val mObj = innerArr.optJSONObject(j)
                                 if (mObj != null) {
                                     val parsed = parseSingleMediaFromJson(mObj, items.size, catName, defaultType = defaultType)
                                     if (parsed != null) items.add(parsed)
                                 }
                             }
-                        } else {
+                        } else if (items.size < 2500) {
                             val parsed = parseSingleMediaFromJson(element, i, defaultCategory, defaultType = defaultType)
                             if (parsed != null) items.add(parsed)
                         }
@@ -1686,6 +1687,7 @@ class MediaRepository(private val context: Context) {
                     }
                 }
             } else if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+                if (items.size >= 2500) break
                 var streamUrl = trimmed
                 val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
                     rawUrl = streamUrl,

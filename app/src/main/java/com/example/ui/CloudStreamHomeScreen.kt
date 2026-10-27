@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -896,7 +897,7 @@ private fun LiveMovieRow(
             contentPadding = PaddingValues(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(movies, key = { it.id }) { item ->
+            itemsIndexed(movies, key = { idx, item -> if (item.id.isNotBlank()) "${item.id}_$idx" else "cs_item_$idx" }) { _, item ->
                 var isFocused by remember { mutableStateOf(false) }
                 val rowItemScale by androidx.compose.animation.core.animateFloatAsState(
                     targetValue = if (isFocused) 1.10f else 1.0f,

@@ -78,9 +78,9 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     msg.contains("ViewRootImpl", ignoreCase = true) ||
                     msg.contains("Key was already used", ignoreCase = true)
 
-            if (thread != Looper.getMainLooper().thread || isRecoverable) {
-                // Recoverable / background error -> ignore & recover to keep app alive
-                Log.w("NafiTvApp", "Suppressed recoverable exception: ${throwable.javaClass.simpleName} - $msg")
+            if (thread != Looper.getMainLooper().thread) {
+                // Background thread errors (network, ExoPlayer codecs, image loading, GC) -> suppress to keep app alive
+                Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
                 if (throwable is java.lang.OutOfMemoryError) {
                     try {
                         customImageLoader?.memoryCache?.clear()
@@ -90,12 +90,10 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     } catch (_: Throwable) {}
                 }
             } else {
-                Log.w("NafiTvApp", "Suppressed main thread uncaught exception safely: ${throwable.message}")
-                try {
-                    Looper.loop()
-                } catch (_: Throwable) {
-                    defaultHandler?.uncaughtException(thread, throwable)
-                }
+                // Main UI thread exception: do NOT call Looper.loop() or suppress silently,
+                // as an abandoned or re-entered main looper freezes input dispatch and triggers ANR ("App isn't responding").
+                Log.e("NafiTvApp", "Uncaught main thread exception: ${throwable.javaClass.simpleName} - $msg", throwable)
+                defaultHandler?.uncaughtException(thread, throwable)
             }
         }
     }

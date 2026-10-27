@@ -28,7 +28,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -1370,7 +1372,7 @@ fun MoviesTabScreen(
                             contentPadding = PaddingValues(horizontal = 14.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            items(catMovies, key = { it.id }) { movie ->
+                            itemsIndexed(catMovies, key = { idx, movie -> if (movie.id.isNotBlank()) "${movie.id}_$idx" else "mov_$idx" }) { _, movie ->
                                 MoviePosterCard(
                                     movie = movie,
                                     isFav = favoriteIds.contains(movie.id),
@@ -1426,7 +1428,7 @@ fun MoviesTabScreen(
                     verticalArrangement = Arrangement.spacedBy(if (isTvMode) 14.dp else 10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(filteredMovies, key = { it.id }) { movie ->
+                    itemsIndexed(filteredMovies, key = { idx, movie -> if (movie.id.isNotBlank()) "${movie.id}_$idx" else "f_mov_$idx" }) { _, movie ->
                         MoviePosterCard(
                             movie = movie,
                             isFav = favoriteIds.contains(movie.id),

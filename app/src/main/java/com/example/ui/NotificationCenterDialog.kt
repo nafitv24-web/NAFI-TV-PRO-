@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -298,7 +299,7 @@ fun NotificationCenterDialog(
                             .weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(filteredNotifications, key = { it.id }) { notif ->
+                        itemsIndexed(filteredNotifications, key = { idx, notif -> if (notif.id.isNotBlank()) "${notif.id}_$idx" else "notif_$idx" }) { _, notif ->
                             NotificationItemCard(
                                 notification = notif,
                                 onSelect = { onSelectNotification(notif) },
