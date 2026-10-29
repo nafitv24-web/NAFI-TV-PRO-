@@ -76,6 +76,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -212,6 +213,47 @@ fun VideoPlayerScreen(
             if (directStream != null && directStream.streamUrl.isNotBlank()) {
                 currentUrl = directStream.streamUrl
                 forceWebEngine = false
+            }
+        }
+    }
+
+    // Fast 302/301 Redirect Pre-Resolver for Xtream / CDN token streams (e.g., rgkkw.live, tokenized IPTV)
+    LaunchedEffect(currentUrl) {
+        val checkUrl = currentUrl.trim()
+        if (checkUrl.startsWith("http://", ignoreCase = true) || checkUrl.startsWith("https://", ignoreCase = true)) {
+            val isLikelyRedirect = checkUrl.contains("rgkkw", ignoreCase = true) ||
+                    (checkUrl.contains("/live/") && checkUrl.contains(".ts", ignoreCase = true)) ||
+                    checkUrl.contains("growthtry", ignoreCase = true)
+            if (isLikelyRedirect) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        val headClient = okhttp3.OkHttpClient.Builder()
+                            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .followRedirects(false)
+                            .build()
+
+                        val req = okhttp3.Request.Builder()
+                            .url(checkUrl)
+                            .get()
+                            .header("User-Agent", "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)")
+                            .header("Accept", "*/*")
+                            .header("Connection", "close")
+                            .build()
+
+                        val response = headClient.newCall(req).execute()
+                        response.use { resp ->
+                            if (resp.code in 300..399) {
+                                val location = resp.header("Location")
+                                if (!location.isNullOrBlank() && location != checkUrl) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        currentUrl = location
+                                    }
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -415,6 +457,34 @@ fun VideoPlayerScreen(
         androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
             .setResetOnNetworkTypeChange(false)
             .setInitialBitrateEstimate(1_500_000L)
+            .build()
+    }
+
+    // High-performance OkHttpClient engine for Media3 streaming:
+    // Handles cross-domain 302/307 redirects, infinite chunked MPEG-TS streams, custom CDN tokens, and all SSL/TLS handshakes
+    val streamOkHttpClient = remember {
+        val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(
+            object : javax.net.ssl.X509TrustManager {
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            }
+        )
+        val sslContext = javax.net.ssl.SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, java.security.SecureRandom())
+        }
+
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS) // 0 = infinite duration for continuous live broadcasts
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .retryOnConnectionFailure(true)
+            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as javax.net.ssl.X509TrustManager)
+            .hostnameVerifier { _, _ -> true }
+            .connectionPool(okhttp3.ConnectionPool(12, 5, java.util.concurrent.TimeUnit.MINUTES))
             .build()
     }
 
@@ -983,15 +1053,13 @@ fun VideoPlayerScreen(
         }
         requestHeaders.putAll(dynamicHeaders)
 
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(15000)
+        // High-performance OkHttp DataSource Factory: supports cross-host redirects, chunked transfer, and resilient keep-alive
+        val httpDataSourceFactory = OkHttpDataSource.Factory(streamOkHttpClient)
             .setUserAgent(finalUserAgent)
             .setTransferListener(bandwidthMeter)
             .setDefaultRequestProperties(requestHeaders)
 
-        // DefaultDataSource delegates http/https to httpDataSourceFactory, and local file:// / content:// / assets to FileDataSource
+        // DefaultDataSource delegates http/https to httpDataSourceFactory (OkHttp), and local file:// / content:// / assets to FileDataSource
         val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(
             context,
             httpDataSourceFactory
@@ -1533,6 +1601,13 @@ fun VideoPlayerScreen(
                                     return
                                 }
                             } catch (_: Exception) {}
+                        }
+
+                        // 2.2 Retry single server stream with alternate User-Agent and fresh connection before auto-skip
+                        if (allServers.size <= 1 && playerRetryKey < 2 && !currentMedia.isSeries) {
+                            playerRetryKey++
+                            errorMessage = null
+                            return
                         }
 
                         // 3. All servers exhausted or single server failed -> Instant Auto-Skip to next channel (only for Live TV/Events):
