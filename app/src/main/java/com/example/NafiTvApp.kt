@@ -37,18 +37,10 @@ class NafiTvApp : Application(), ImageLoaderFactory {
             com.example.util.SportsInteractionManager.init(this)
         } catch (_: Exception) {}
 
-        // Pre-warm local file caches and assets on Dispatchers.IO to guarantee 0ms UI startup
+        // Light background maintenance delayed by 4 seconds so UI loads instantaneously like butter
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             try {
-                val repo = com.example.data.MediaRepository(this@NafiTvApp)
-                repo.getDefaultBuiltinLiveTv()
-                repo.getDefaultBuiltinMovies()
-                repo.getCachedLiveTvChannels()
-                repo.getCachedSportsMatches()
-                repo.getCachedMoviesList()
-                repo.getDeletedIds()
-                repo.getInitialPlaylists()
-                // Automatic storage & cache hygiene on startup to prevent bloat
+                kotlinx.coroutines.delay(4000)
                 com.example.util.StorageCleaner.cleanOnStartup(this@NafiTvApp)
             } catch (_: Exception) {}
         }

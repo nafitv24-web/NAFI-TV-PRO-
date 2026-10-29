@@ -217,46 +217,6 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Fast 302/301 Redirect Pre-Resolver for Xtream / CDN token streams (e.g., rgkkw.live, tokenized IPTV)
-    LaunchedEffect(currentUrl) {
-        val checkUrl = currentUrl.trim()
-        if (checkUrl.startsWith("http://", ignoreCase = true) || checkUrl.startsWith("https://", ignoreCase = true)) {
-            val isLikelyRedirect = checkUrl.contains("rgkkw", ignoreCase = true) ||
-                    (checkUrl.contains("/live/") && checkUrl.contains(".ts", ignoreCase = true)) ||
-                    checkUrl.contains("growthtry", ignoreCase = true)
-            if (isLikelyRedirect) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    try {
-                        val headClient = okhttp3.OkHttpClient.Builder()
-                            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-                            .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-                            .followRedirects(false)
-                            .build()
-
-                        val req = okhttp3.Request.Builder()
-                            .url(checkUrl)
-                            .get()
-                            .header("User-Agent", "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)")
-                            .header("Accept", "*/*")
-                            .header("Connection", "close")
-                            .build()
-
-                        val response = headClient.newCall(req).execute()
-                        response.use { resp ->
-                            if (resp.code in 300..399) {
-                                val location = resp.header("Location")
-                                if (!location.isNullOrBlank() && location != checkUrl) {
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        currentUrl = location
-                                    }
-                                }
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-    }
 
     // Record user live presence & streaming activity
     LaunchedEffect(currentMedia.id, currentMedia.title) {
@@ -460,33 +420,7 @@ fun VideoPlayerScreen(
             .build()
     }
 
-    // High-performance OkHttpClient engine for Media3 streaming:
-    // Handles cross-domain 302/307 redirects, infinite chunked MPEG-TS streams, custom CDN tokens, and all SSL/TLS handshakes
-    val streamOkHttpClient = remember {
-        val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(
-            object : javax.net.ssl.X509TrustManager {
-                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
-                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-            }
-        )
-        val sslContext = javax.net.ssl.SSLContext.getInstance("TLS").apply {
-            init(null, trustAllCerts, java.security.SecureRandom())
-        }
 
-        okhttp3.OkHttpClient.Builder()
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .callTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS) // 0 = infinite duration for continuous live broadcasts
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .retryOnConnectionFailure(true)
-            .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as javax.net.ssl.X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
-            .connectionPool(okhttp3.ConnectionPool(12, 5, java.util.concurrent.TimeUnit.MINUTES))
-            .build()
-    }
 
     // Smooth debounce for buffering overlay so micro network fluctuations don't flash intrusive cards over active video
     LaunchedEffect(isBuffering, hasStartedPlaying) {
@@ -958,7 +892,7 @@ fun VideoPlayerScreen(
             !extractedUa.isNullOrBlank() -> extractedUa!!
             isToffee -> "Toffee (Linux;Android 14)"
             isMovieLinkBd -> "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-            isTsStream || isAkr4m || isXtreamStream -> "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
+            isTsStream || isAkr4m || isXtreamStream -> "Lavf/58.76.100"
             else -> "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
         }
 
@@ -978,12 +912,13 @@ fun VideoPlayerScreen(
             ).distinct()
             else -> listOf(
                 primaryUa,
+                "Lavf/58.76.100",
                 "VLC/3.0.18 LibVLC/3.0.18",
-                "Televizo/1.9.3 (Linux; Android 14)",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)",
+                "Televizo/1.9.3 (Linux; Android 14)",
                 "TiviMate/4.7.0 (Android TV)",
-                "Toffee (Linux;Android 14)"
+                "Toffee (Linux;Android 14)",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ).distinct()
         }
         val finalUserAgent = fallbackUserAgents[playerRetryKey.coerceAtLeast(0) % fallbackUserAgents.size]
@@ -1046,23 +981,21 @@ fun VideoPlayerScreen(
         }
 
         requestHeaders["Accept"] = "*/*"
-        requestHeaders["Connection"] = "keep-alive"
-        requestHeaders["Cache-Control"] = "no-cache"
-        if (isTsStream || isXtreamStream || isMovieLinkBd) {
+        if (!isTsStream && !isXtreamStream) {
+            requestHeaders["Connection"] = "keep-alive"
+            requestHeaders["Cache-Control"] = "no-cache"
+        }
+        if (isMovieLinkBd) {
             requestHeaders["Accept-Encoding"] = "identity"
         }
         requestHeaders.putAll(dynamicHeaders)
 
         // High-performance OkHttp DataSource Factory: supports cross-host redirects, chunked transfer, and resilient keep-alive
-        val httpDataSourceFactory = OkHttpDataSource.Factory(streamOkHttpClient)
-            .setUserAgent(finalUserAgent)
-            .setTransferListener(bandwidthMeter)
-            .setDefaultRequestProperties(requestHeaders)
-
-        // DefaultDataSource delegates http/https to httpDataSourceFactory (OkHttp), and local file:// / content:// / assets to FileDataSource
-        val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(
-            context,
-            httpDataSourceFactory
+        val (httpDataSourceFactory, defaultDataSourceFactory) = com.example.util.MediaStreamingClient.createDataSourceFactory(
+            context = context,
+            userAgent = finalUserAgent,
+            headers = requestHeaders,
+            bandwidthMeter = bandwidthMeter
         )
 
         val isLiveStream = !isMovieFormat && !isMovieLinkBd && (
@@ -1093,8 +1026,7 @@ fun VideoPlayerScreen(
         val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(!isLiveStream)
             .setTsExtractorFlags(tsPayloadReaderFlags)
-            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT)
-            .setTsExtractorTimestampSearchBytes(androidx.media3.extractor.ts.TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES * 4)
+            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_SINGLE_PMT)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(defaultDataSourceFactory, extractorsFactory)
             .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
