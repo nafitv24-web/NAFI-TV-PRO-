@@ -190,6 +190,20 @@ object StorageCleaner {
                     }
                 }
             }
+            // Sanitize channel_status_prefs if it has bloated from previous sessions
+            try {
+                val sp = context.getSharedPreferences("channel_status_prefs", Context.MODE_PRIVATE)
+                val failed = sp.getStringSet("failed_channels", emptySet())
+                val verified = sp.getStringSet("verified_active", emptySet())
+                val servers = sp.getStringSet("failed_servers", emptySet())
+                if ((failed?.size ?: 0) > 100 || (verified?.size ?: 0) > 100 || (servers?.size ?: 0) > 60) {
+                    sp.edit()
+                        .putStringSet("failed_channels", failed?.toList()?.takeLast(80)?.toSet() ?: emptySet())
+                        .putStringSet("verified_active", verified?.toList()?.takeLast(80)?.toSet() ?: emptySet())
+                        .putStringSet("failed_servers", servers?.toList()?.takeLast(40)?.toSet() ?: emptySet())
+                        .apply()
+                }
+            } catch (_: Exception) {}
         } catch (e: Exception) {
             Log.w(TAG, "Startup clean warning", e)
         }

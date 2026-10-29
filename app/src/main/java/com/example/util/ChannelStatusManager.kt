@@ -51,6 +51,7 @@ object ChannelStatusManager {
     // Strict 2.5s call timeout prevents thread lockups on unresponsive streaming servers
     private val checkClient by lazy {
         OkHttpClient.Builder()
+            .dns(MediaStreamingClient.smartDns)
             .callTimeout(2500, TimeUnit.MILLISECONDS)
             .connectTimeout(2000, TimeUnit.MILLISECONDS)
             .readTimeout(2000, TimeUnit.MILLISECONDS)
@@ -89,6 +90,22 @@ object ChannelStatusManager {
         val verifiedSet = p.getStringSet(KEY_VERIFIED_ACTIVE, emptySet()) ?: emptySet()
         val failedServers = p.getStringSet(KEY_FAILED_SERVERS, emptySet()) ?: emptySet()
 
+        // Sanitize legacy bloat if older versions saved thousands of IDs
+        if (failedSet.size > 150 || verifiedSet.size > 150 || failedServers.size > 100) {
+            val prunedFailed = failedSet.toList().takeLast(100).toSet()
+            val prunedVerified = verifiedSet.toList().takeLast(100).toSet()
+            val prunedServers = failedServers.toList().takeLast(50).toSet()
+            p.edit()
+                .putStringSet(KEY_FAILED_CHANNELS, prunedFailed)
+                .putStringSet(KEY_VERIFIED_ACTIVE, prunedVerified)
+                .putStringSet(KEY_FAILED_SERVERS, prunedServers)
+                .apply()
+            prunedFailed.forEach { id -> workingStatusMap[id] = false }
+            prunedVerified.forEach { id -> workingStatusMap[id] = true }
+            prunedServers.forEach { url -> failedServerUrls.add(url) }
+            return
+        }
+
         for (id in failedSet) {
             workingStatusMap[id] = false
         }
@@ -98,6 +115,20 @@ object ChannelStatusManager {
         for (url in failedServers) {
             failedServerUrls.add(url)
         }
+    }
+
+    fun clearAllStatusCache() {
+        workingStatusMap.clear()
+        failedServerUrls.clear()
+        probingIds.clear()
+        probedIds.clear()
+        probeQueue.clear()
+        prefs?.edit()
+            ?.remove(KEY_FAILED_CHANNELS)
+            ?.remove(KEY_VERIFIED_ACTIVE)
+            ?.remove(KEY_FAILED_SERVERS)
+            ?.apply()
+        _statusUpdateTick.value = System.currentTimeMillis()
     }
 
     /**
@@ -443,7 +474,8 @@ object ChannelStatusManager {
         try {
             val curSet = p.getStringSet(KEY_FAILED_SERVERS, emptySet())?.toMutableSet() ?: mutableSetOf()
             curSet.add(serverUrl)
-            p.edit().putStringSet(KEY_FAILED_SERVERS, curSet).apply()
+            val boundedSet = if (curSet.size > 80) curSet.toList().takeLast(60).toSet() else curSet
+            p.edit().putStringSet(KEY_FAILED_SERVERS, boundedSet).apply()
         } catch (e: Exception) {
             Log.w("ChannelStatusManager", "Failed to save failed server status", e)
         }
@@ -472,9 +504,12 @@ object ChannelStatusManager {
             otherSet.remove(channelId)
             curSet.add(channelId)
 
+            val boundedCurSet = if (curSet.size > 120) curSet.toList().takeLast(100).toSet() else curSet
+            val boundedOtherSet = if (otherSet.size > 120) otherSet.toList().takeLast(100).toSet() else otherSet
+
             p.edit()
-                .putStringSet(key, curSet)
-                .putStringSet(otherKey, otherSet)
+                .putStringSet(key, boundedCurSet)
+                .putStringSet(otherKey, boundedOtherSet)
                 .apply()
         } catch (e: Exception) {
             Log.w("ChannelStatusManager", "Failed to save channel status", e)
@@ -498,9 +533,12 @@ object ChannelStatusManager {
                 }
             }
 
+            val boundedVerified = if (verifiedSet.size > 120) verifiedSet.toList().takeLast(100).toSet() else verifiedSet
+            val boundedFailed = if (failedSet.size > 120) failedSet.toList().takeLast(100).toSet() else failedSet
+
             p.edit()
-                .putStringSet(KEY_VERIFIED_ACTIVE, verifiedSet)
-                .putStringSet(KEY_FAILED_CHANNELS, failedSet)
+                .putStringSet(KEY_VERIFIED_ACTIVE, boundedVerified)
+                .putStringSet(KEY_FAILED_CHANNELS, boundedFailed)
                 .apply()
         } catch (e: Exception) {
             Log.w("ChannelStatusManager", "Failed to batch save channel statuses", e)
