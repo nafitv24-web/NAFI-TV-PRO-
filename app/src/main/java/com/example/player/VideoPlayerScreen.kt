@@ -757,7 +757,7 @@ fun VideoPlayerScreen(
                 scheme + rest.replace(Regex("/+"), "/")
             }
         }
-        val isRgkkw = rawClean.contains("rgkkw.live", ignoreCase = true)
+        val isRgkkw = rawClean.contains("rgkkw", ignoreCase = true)
 
         // Only convert specifically rgkkw.live live channels from .m3u8 to .ts on the path component (rgkkw live streams serve .ts)
         // NEVER touch movies (/movie/), series (/series/), .mp4, .mkv, or standard HLS playlists!
@@ -838,7 +838,7 @@ fun VideoPlayerScreen(
         if (isAkr4m) {
             if (extractedUa.isNullOrBlank()) extractedUa = "VLC/3.0.18 LibVLC/3.0.18"
         } else if (isRgkkw) {
-            if (extractedUa.isNullOrBlank()) extractedUa = "IPTVSmartersPro"
+            if (extractedUa.isNullOrBlank()) extractedUa = "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
         }
 
         val isMovieLinkBd = finalCleanUrl.contains("movielinkbd", ignoreCase = true) ||
@@ -877,9 +877,11 @@ fun VideoPlayerScreen(
                 finalCleanUrl.contains("zerotv", ignoreCase = true) ||
                 isRgkkw
 
-        val isTsStream = !isM3u8Pattern && !isMovieFormat && (pathBeforeQuery.endsWith(".ts") ||
+        val isTsStream = !isMovieFormat && !isMovieLinkBd && (pathBeforeQuery.endsWith(".ts") ||
+                finalCleanUrl.contains(".ts?", ignoreCase = true) ||
                 finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
-                (isXtreamStream && !finalCleanUrl.contains(".m3u8", ignoreCase = true)))
+                finalCleanUrl.contains("output=ts", ignoreCase = true) ||
+                ((isXtreamStream || isRgkkw) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true)))
 
         val primaryUa = when {
             isTapmad -> "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)"
@@ -1017,12 +1019,13 @@ fun VideoPlayerScreen(
         // TS Extractor Flags for IPTV streams (MP2, AC3, AAC in MPEG-TS with PES packet size variations)
         val tsPayloadReaderFlags = androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
                 androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or
-                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM
+                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM or
+                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
 
         val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(!isLiveStream)
             .setTsExtractorFlags(tsPayloadReaderFlags)
-            .setTsExtractorMode(if (isTsStream) androidx.media3.extractor.ts.TsExtractor.MODE_SINGLE_PMT else androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT)
+            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT)
             .setTsExtractorTimestampSearchBytes(androidx.media3.extractor.ts.TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES * 4)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(defaultDataSourceFactory, extractorsFactory)
@@ -1217,7 +1220,16 @@ fun VideoPlayerScreen(
                         drmConfig?.manifestType?.equals("mpd", ignoreCase = true) == true ||
                         currentMedia.manifestType?.equals("mpd", ignoreCase = true) == true
 
-                val isM3u8 = finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
+                val isExplicitTs = !isMovieFormat && !isMp4 && !isMkv && !isWebm && (
+                        pathBeforeQuery.endsWith(".ts") ||
+                        finalCleanUrl.contains(".ts?", ignoreCase = true) ||
+                        finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
+                        finalCleanUrl.contains("output=ts", ignoreCase = true) ||
+                        ((isRgkkw || isXtreamStream) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true))
+                )
+
+                val isM3u8 = !isExplicitTs && (
+                        finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
                         pathBeforeQuery.endsWith(".m3u8") ||
                         finalCleanUrl.contains("/hls/", ignoreCase = true) ||
                         drmConfig?.manifestType?.equals("hls", ignoreCase = true) == true ||
@@ -1226,12 +1238,9 @@ fun VideoPlayerScreen(
                         (!isFileHost && !isMovieFormat && !isMp4 && !isMkv && !isWebm && !isMpd && (
                                 currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT || currentMedia.isLive
                         ))
+                )
 
-                val isTs = !isM3u8 && (
-                        pathBeforeQuery.endsWith(".ts") ||
-                        finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
-                        ((isRgkkw && finalCleanUrl.contains("/live/")) && !finalCleanUrl.contains(".m3u8", ignoreCase = true))
-                ) && !isMp4 && !isMkv && !isWebm
+                val isTs = isExplicitTs
 
                 if (isLiveStream && !isTs) {
                     // Safe target live offset: tuned for HLS/DASH manifest streams
@@ -1263,10 +1272,10 @@ fun VideoPlayerScreen(
 
                 if (isMpd) {
                     mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
-                } else if (isM3u8) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
                 } else if (isTs) {
                     mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_MP2T)
+                } else if (isM3u8) {
+                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
                 } else if (isMp4) {
                     mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_MP4)
                 } else if (isMkv) {
@@ -1458,7 +1467,8 @@ fun VideoPlayerScreen(
                                 currentUrl.contains("toffee", ignoreCase = true) ||
                                 currentUrl.contains("akamaized.net", ignoreCase = true) ||
                                 currentUrl.contains("tapmad", ignoreCase = true)
-                        if (!isProtectHls && currentUrl.contains("/live/") && currentUrl.contains(".ts", ignoreCase = true) && playerRetryKey == 0) {
+                        val isRgkkwCurrent = currentUrl.contains("rgkkw", ignoreCase = true)
+                        if (!isProtectHls && !isRgkkwCurrent && currentUrl.contains("/live/") && currentUrl.contains(".ts", ignoreCase = true) && playerRetryKey == 0) {
                             currentUrl = currentUrl.replace(".ts", ".m3u8", ignoreCase = true)
                             playerRetryKey = 1
                             errorMessage = null

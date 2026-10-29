@@ -286,24 +286,25 @@ object ChannelStatusManager {
         if (!isValidStreamFormat(url)) return false
 
         val lowerUrl = url.lowercase()
-        // Determine appropriate User-Agent & Referer for known streaming networks
+        val isRgkkw = lowerUrl.contains("rgkkw")
         val effectiveUa = extraHeaders["User-Agent"]
             ?: when {
                 lowerUrl.contains("toffee") || lowerUrl.contains("bldcmprod-cdn") -> "Toffee (Linux;Android 14)"
+                isRgkkw -> "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
                 else -> "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
             }
-        val effectiveReferer = extraHeaders["Referer"]
+        val effectiveReferer = if (isRgkkw) null else (extraHeaders["Referer"]
             ?: when {
                 lowerUrl.contains("toffee") || lowerUrl.contains("bldcmprod-cdn") -> "https://toffeelive.com/"
                 lowerUrl.contains("hakunaymatata") || lowerUrl.contains("sacdn") -> "https://hakunaymatata.com/"
                 else -> null
-            }
-        val effectiveOrigin = extraHeaders["Origin"]
+            })
+        val effectiveOrigin = if (isRgkkw) null else (extraHeaders["Origin"]
             ?: when {
                 lowerUrl.contains("toffee") || lowerUrl.contains("bldcmprod-cdn") -> "https://toffeelive.com"
                 lowerUrl.contains("hakunaymatata") || lowerUrl.contains("sacdn") -> "https://hakunaymatata.com"
                 else -> null
-            }
+            })
 
         return try {
             // First attempt: HEAD request (Fastest)
