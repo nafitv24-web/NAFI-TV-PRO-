@@ -757,7 +757,7 @@ fun MoviesTabScreen(
                     }
 
                     // Dynamic OTT Platforms & Movie Servers (Only Admin Configured)
-                    items(adminHubs, key = { it.id }) { hub ->
+                    itemsIndexed(adminHubs, key = { idx, hub -> "${hub.id.ifBlank { "hub" }}_$idx" }) { _, hub ->
                         val isSelected = activeHubId == hub.id
                         OttCircularBrandIcon(
                             title = hub.title,
@@ -1311,7 +1311,7 @@ fun MoviesTabScreen(
                 // -----------------------------------------------------
                 // (B) CATEGORIZED HORIZONTAL CAROUSELS (Netflix Shelves)
                 // -----------------------------------------------------
-                items(categorizedMovies, key = { it.first }) { (categoryName, catMovies) ->
+                itemsIndexed(categorizedMovies, key = { idx, pair -> "${pair.first.ifBlank { "cat" }}_$idx" }) { _, (categoryName, catMovies) ->
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1352,7 +1352,7 @@ fun MoviesTabScreen(
                             contentPadding = PaddingValues(horizontal = 14.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            itemsIndexed(catMovies, key = { idx, movie -> if (movie.id.isNotBlank()) movie.id else "mov_${movie.title.hashCode()}_$idx" }) { _, movie ->
+                            itemsIndexed(catMovies, key = { idx, movie -> "${movie.id.ifBlank { "mov" }}_$idx" }) { _, movie ->
                                 MoviePosterCard(
                                     movie = movie,
                                     isFav = favoriteIds.contains(movie.id),
@@ -1408,7 +1408,7 @@ fun MoviesTabScreen(
                     verticalArrangement = Arrangement.spacedBy(if (isTvMode) 14.dp else 10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(filteredMovies, key = { idx, movie -> if (movie.id.isNotBlank()) movie.id else "f_mov_${movie.title.hashCode()}_$idx" }) { _, movie ->
+                    itemsIndexed(filteredMovies, key = { idx, movie -> "${movie.id.ifBlank { "f_mov" }}_$idx" }) { _, movie ->
                         MoviePosterCard(
                             movie = movie,
                             isFav = favoriteIds.contains(movie.id),

@@ -51,51 +51,45 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e("NafiTvApp", "Intercepted crash on thread: ${thread.name}", throwable)
             val msg = throwable.message ?: ""
-            val isRecoverable = throwable is java.lang.OutOfMemoryError ||
-                    throwable is android.view.WindowManager.BadTokenException ||
-                    throwable is android.os.DeadObjectException ||
-                    throwable is android.media.MediaCodec.CodecException ||
-                    throwable is java.util.concurrent.TimeoutException ||
-                    throwable is java.net.SocketTimeoutException ||
-                    throwable is java.io.IOException ||
-                    throwable is java.lang.IllegalArgumentException ||
-                    throwable is java.lang.IllegalStateException ||
-                    throwable is java.lang.NullPointerException ||
-                    throwable is java.lang.IndexOutOfBoundsException ||
-                    msg.contains("MediaCodec", ignoreCase = true) ||
-                    msg.contains("Surface", ignoreCase = true) ||
-                    msg.contains("DeadObject", ignoreCase = true) ||
-                    msg.contains("OutOfMemory", ignoreCase = true) ||
-                    msg.contains("EGL", ignoreCase = true) ||
-                    msg.contains("GLES", ignoreCase = true) ||
-                    msg.contains("TextureView", ignoreCase = true) ||
-                    msg.contains("ViewRootImpl", ignoreCase = true) ||
-                    msg.contains("Key was already used", ignoreCase = true)
+
+            // Immediately clear memory caches to alleviate any memory pressure
+            try {
+                customImageLoader?.memoryCache?.clear()
+                sharedOkHttpClient.connectionPool.evictAll()
+            } catch (_: Throwable) {}
 
             if (thread != Looper.getMainLooper().thread) {
                 // Background thread errors (network, ExoPlayer codecs, image loading, GC) -> suppress to keep app alive
                 Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
-                if (throwable is java.lang.OutOfMemoryError) {
-                    try {
-                        customImageLoader?.memoryCache?.clear()
-                        sharedOkHttpClient.connectionPool.evictAll()
-                        System.runFinalization()
-                        System.gc()
-                    } catch (_: Throwable) {}
-                }
             } else {
-                // Main UI thread exception: do NOT call Looper.loop() or suppress silently,
-                // as an abandoned or re-entered main looper freezes input dispatch and triggers ANR ("App isn't responding").
-                Log.e("NafiTvApp", "Uncaught main thread exception: ${throwable.javaClass.simpleName} - $msg", throwable)
-                defaultHandler?.uncaughtException(thread, throwable)
+                // Main UI thread exception: Instead of allowing the system to show "NAFI TV Pro keeps stopping",
+                // cleanly restart MainActivity so the user stays smoothly inside the app without a crash dialog.
+                Log.e("NafiTvApp", "Main thread crash detected. Performing clean restart to prevent crash dialog: $msg", throwable)
+                try {
+                    val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    }
+                    if (intent != null) {
+                        startActivity(intent)
+                    }
+                } catch (e: Exception) {
+                    Log.e("NafiTvApp", "Failed to restart MainActivity", e)
+                    defaultHandler?.uncaughtException(thread, throwable)
+                    return@setDefaultUncaughtExceptionHandler
+                }
+                android.os.Process.killProcess(android.os.Process.myPid())
+                System.exit(10)
             }
         }
     }
 
     fun isLowRamEnvironment(): Boolean {
         val actManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        actManager?.getMemoryInfo(memInfo)
+        val totalRamMb = memInfo.totalMem / (1024 * 1024)
         val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024)
-        return actManager?.isLowRamDevice == true || maxHeapMb <= 128
+        return actManager?.isLowRamDevice == true || totalRamMb <= 1500 || maxHeapMb <= 192
     }
 
     override fun newImageLoader(): ImageLoader {

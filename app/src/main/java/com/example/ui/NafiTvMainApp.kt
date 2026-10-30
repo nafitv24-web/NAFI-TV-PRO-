@@ -3845,7 +3845,7 @@ fun EventsScreen(
             ) {
                 itemsIndexed(
                     filteredSports,
-                    key = { index, sport -> if (sport.id.isNotBlank()) sport.id else "sport_${sport.title.hashCode()}_$index" }
+                    key = { index, sport -> "${sport.id.ifBlank { "sport" }}_$index" }
                 ) { _, sport ->
                     LiveEventMatchCard(
                         sport = sport,
