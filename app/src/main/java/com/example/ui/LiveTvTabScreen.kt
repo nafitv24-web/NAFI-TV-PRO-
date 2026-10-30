@@ -326,7 +326,7 @@ fun LiveTvTabScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                itemsIndexed(filteredChannels, key = { index, it -> if (it.id.isNotBlank()) "${it.id}_$index" else "ltv_$index" }) { index, channel ->
+                itemsIndexed(filteredChannels, key = { index, it -> if (it.id.isNotBlank()) it.id else "ltv_${it.title.hashCode()}_$index" }) { index, channel ->
                     val isFav = favoriteIds.contains(channel.id)
                     var isFocused by remember { mutableStateOf(false) }
                     val isActive = ChannelStatusManager.isChannelActive(channel)
