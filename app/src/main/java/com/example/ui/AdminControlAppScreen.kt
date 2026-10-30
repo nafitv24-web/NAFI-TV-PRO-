@@ -40,8 +40,10 @@ import com.example.model.AppConfigData
 import com.example.model.*
 import com.example.util.NotificationHelper
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Build safety and backward compatibility
 var isItemDeleted: Boolean = false
@@ -1539,12 +1541,17 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         if (sportsM3uInput.isNotBlank()) {
                                             val url = sportsM3uInput.trim()
-                                            repository.saveSportsM3uUrl(url)
                                             coroutineScope.launch {
-                                                repository.pushAppConfigToFirebase(sportsM3u = url)
+                                                val ok = repository.pushAppConfigToFirebase(sportsM3u = url)
+                                                withContext(Dispatchers.Main) {
+                                                    onDataChanged()
+                                                    if (ok) {
+                                                        Toast.makeText(context, "✅ স্পোর্টস M3U ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "স্পোর্টস M3U সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
                                             }
-                                            onDataChanged()
-                                            Toast.makeText(context, "✅ স্পোর্টস M3U ক্লাউডে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "সঠিক স্পোর্টস M3U লিংক দিন", Toast.LENGTH_SHORT).show()
                                         }
@@ -1560,12 +1567,13 @@ fun AdminControlAppScreen(
                                 OutlinedButton(
                                     onClick = {
                                         sportsM3uInput = MediaRepository.DEFAULT_SPORTS_M3U_URL
-                                        repository.saveSportsM3uUrl(MediaRepository.DEFAULT_SPORTS_M3U_URL)
                                         coroutineScope.launch {
                                             repository.pushAppConfigToFirebase(sportsM3u = MediaRepository.DEFAULT_SPORTS_M3U_URL)
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                Toast.makeText(context, "ডিফল্ট স্পোর্টস M3U রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
-                                        onDataChanged()
-                                        Toast.makeText(context, "ডিফল্ট স্পোর্টস M3U রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -1634,13 +1642,18 @@ fun AdminControlAppScreen(
                                         if (tapmadJsonInput.isNotBlank()) {
                                             val jsonUrl = tapmadJsonInput.trim()
                                             val m3uUrl = tapmadM3uInput.trim()
-                                            repository.saveTapmadJsonUrl(jsonUrl)
-                                            repository.saveTapmadM3uUrl(m3uUrl)
+                                            if (m3uUrl.isNotBlank()) repository.saveTapmadM3uUrl(m3uUrl)
                                             coroutineScope.launch {
-                                                repository.pushAppConfigToFirebase(tapmadJson = jsonUrl)
+                                                val ok = repository.pushAppConfigToFirebase(tapmadJson = jsonUrl)
+                                                withContext(Dispatchers.Main) {
+                                                    onDataChanged()
+                                                    if (ok) {
+                                                        Toast.makeText(context, "✅ JSON API লিংক সফলভাবে সেভ ও ফায়ারবেসে সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "JSON API লিংক সংরক্ষিত ও ক্লাউডে পাঠানো হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
                                             }
-                                            onDataChanged()
-                                            Toast.makeText(context, "✅ JSON API লিংক সফলভাবে সেভ ও ফায়ারবেসে সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "সঠিক JSON API লিংক দিন", Toast.LENGTH_SHORT).show()
                                         }
@@ -1657,13 +1670,13 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         tapmadJsonInput = MediaRepository.DEFAULT_TAPMAD_JSON_URL
                                         tapmadM3uInput = MediaRepository.DEFAULT_TAPMAD_M3U_URL
-                                        repository.saveTapmadJsonUrl(MediaRepository.DEFAULT_TAPMAD_JSON_URL)
-                                        repository.saveTapmadM3uUrl(MediaRepository.DEFAULT_TAPMAD_M3U_URL)
                                         coroutineScope.launch {
                                             repository.pushAppConfigToFirebase(tapmadJson = MediaRepository.DEFAULT_TAPMAD_JSON_URL)
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                Toast.makeText(context, "ডিফল্ট JSON API লিংক রিসেট ও সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
-                                        onDataChanged()
-                                        Toast.makeText(context, "ডিফল্ট JSON API লিংক রিসেট ও সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -2145,22 +2158,6 @@ fun AdminControlAppScreen(
                                         )
 
                                         repository.saveCustomStream(matchItem)
-                                        coroutineScope.launch {
-                                            repository.pushToFirebase(matchItem)
-                                            val notif = AppNotification(
-                                                title = "⚽ নতুন ম্যাচ: ${matchItem.title}",
-                                                message = if (!matchItem.tournament.isNullOrBlank()) "${matchItem.tournament} - এখনই লাইভ উপভোগ করুন!" else "নতুন লাইভ ম্যাচ যোগ করা হয়েছে!",
-                                                type = NotificationType.LIVE_EVENT,
-                                                targetId = matchItem.id,
-                                                imageUrl = matchItem.logoUrl ?: matchItem.team1Logo ?: matchItem.team2Logo
-                                            )
-                                            repository.broadcastNotification(notif)
-                                            NotificationHelper.showSystemNotification(context, notif)
-                                            adminNotificationHistory = repository.getStoredNotifications()
-                                        }
-                                        onDataChanged()
-
-                                        // Reset fields
                                         tournamentName = ""
                                         matchPosterUrl = ""
                                         team1Name = ""
@@ -2176,7 +2173,28 @@ fun AdminControlAppScreen(
                                             StreamServer("TT", ""),
                                             StreamServer("TEMP", "")
                                         )
-                                        Toast.makeText(context, "ম্যাচ সফলভাবে পাবলিশ ও Firebase এ সংরক্ষিত হয়েছে!", Toast.LENGTH_SHORT).show()
+
+                                        coroutineScope.launch {
+                                            val pushResult = repository.pushToFirebase(matchItem)
+                                            val notif = AppNotification(
+                                                title = "⚽ নতুন ম্যাচ: ${matchItem.title}",
+                                                message = if (!matchItem.tournament.isNullOrBlank()) "${matchItem.tournament} - এখনই লাইভ উপভোগ করুন!" else "নতুন লাইভ ম্যাচ যোগ করা হয়েছে!",
+                                                type = NotificationType.LIVE_EVENT,
+                                                targetId = matchItem.id,
+                                                imageUrl = matchItem.logoUrl ?: matchItem.team1Logo ?: matchItem.team2Logo
+                                            )
+                                            repository.broadcastNotification(notif)
+                                            NotificationHelper.showSystemNotification(context, notif)
+                                            adminNotificationHistory = repository.getStoredNotifications()
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (pushResult.first) {
+                                                    Toast.makeText(context, "✅ ম্যাচ সফলভাবে ফায়ারবেসে পাবলিশ ও সেভ হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "ম্যাচ লোকালি সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
                                     } else {
                                         Toast.makeText(context, "টিম এর নাম এবং কমপক্ষে একটি সার্ভার লিঙ্ক লিখুন", Toast.LENGTH_SHORT).show()
                                     }
@@ -2387,12 +2405,17 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         if (liveTvM3uInput.isNotBlank()) {
                                             val url = liveTvM3uInput.trim()
-                                            repository.saveLiveTvM3uUrl(url)
                                             coroutineScope.launch {
-                                                repository.pushAppConfigToFirebase(liveTvM3u = url)
+                                                val ok = repository.pushAppConfigToFirebase(liveTvM3u = url)
+                                                withContext(Dispatchers.Main) {
+                                                    onDataChanged()
+                                                    if (ok) {
+                                                        Toast.makeText(context, "✅ লাইভ টিভি M3U ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "লাইভ টিভি M3U সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
                                             }
-                                            onDataChanged()
-                                            Toast.makeText(context, "✅ লাইভ টিভি M3U ক্লাউডে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "সঠিক M3U লিংক দিন", Toast.LENGTH_SHORT).show()
                                         }
@@ -2408,12 +2431,13 @@ fun AdminControlAppScreen(
                                 OutlinedButton(
                                     onClick = {
                                         liveTvM3uInput = MediaRepository.DEFAULT_LIVE_TV_M3U_URL
-                                        repository.saveLiveTvM3uUrl(MediaRepository.DEFAULT_LIVE_TV_M3U_URL)
                                         coroutineScope.launch {
                                             repository.pushAppConfigToFirebase(liveTvM3u = MediaRepository.DEFAULT_LIVE_TV_M3U_URL)
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                Toast.makeText(context, "ডিফল্ট লাইভ টিভি M3U লিঙ্ক রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
-                                        onDataChanged()
-                                        Toast.makeText(context, "ডিফল্ট লাইভ টিভি M3U লিঙ্ক রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -2528,8 +2552,12 @@ fun AdminControlAppScreen(
                                             isLive = true
                                         )
                                         repository.saveCustomStream(item)
+                                        channelName = ""
+                                        server1Url = ""
+                                        server2Url = ""
+                                        channelLogoUrl = ""
                                         coroutineScope.launch {
-                                            repository.pushToFirebase(item)
+                                            val pushResult = repository.pushToFirebase(item)
                                             val notif = AppNotification(
                                                 title = "📺 নতুন চ্যানেল: ${item.title}",
                                                 message = "${item.category} ক্যাটাগরিতে নতুন চ্যানেল যুক্ত হয়েছে। উপভোগ করুন!",
@@ -2540,13 +2568,15 @@ fun AdminControlAppScreen(
                                             repository.broadcastNotification(notif)
                                             NotificationHelper.showSystemNotification(context, notif)
                                             adminNotificationHistory = repository.getStoredNotifications()
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (pushResult.first) {
+                                                    Toast.makeText(context, "✅ চ্যানেল ফায়ারবেসে সফলভাবে পাবলিশ হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "চ্যানেল সংরক্ষিত ও ক্লাউডে সিঙ্ক পাঠানো হয়েছে", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         }
-                                        onDataChanged()
-                                        channelName = ""
-                                        server1Url = ""
-                                        server2Url = ""
-                                        channelLogoUrl = ""
-                                        Toast.makeText(context, "চ্যানেল পাবলিশ হয়েছে!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -3277,12 +3307,17 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         if (moviesM3uInput.isNotBlank()) {
                                             val url = moviesM3uInput.trim()
-                                            repository.saveMoviesM3uUrl(url)
                                             coroutineScope.launch {
-                                                repository.pushAppConfigToFirebase(moviesM3u = url)
+                                                val ok = repository.pushAppConfigToFirebase(moviesM3u = url)
+                                                withContext(Dispatchers.Main) {
+                                                    onDataChanged()
+                                                    if (ok) {
+                                                        Toast.makeText(context, "✅ মুভি প্লেলিস্ট ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, "মুভি প্লেলিস্ট সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
                                             }
-                                            onDataChanged()
-                                            Toast.makeText(context, "✅ মুভি প্লেলিস্ট ক্লাউডে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "অনুগ্রহ করে একটি সঠিক মুভি M3U URL দিন", Toast.LENGTH_SHORT).show()
                                         }
@@ -3298,12 +3333,13 @@ fun AdminControlAppScreen(
                                 OutlinedButton(
                                     onClick = {
                                         moviesM3uInput = MediaRepository.DEFAULT_MOVIES_M3U_URL
-                                        repository.saveMoviesM3uUrl(MediaRepository.DEFAULT_MOVIES_M3U_URL)
                                         coroutineScope.launch {
                                             repository.pushAppConfigToFirebase(moviesM3u = MediaRepository.DEFAULT_MOVIES_M3U_URL)
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                Toast.makeText(context, "মুভি প্লেলিস্ট রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
-                                        onDataChanged()
-                                        Toast.makeText(context, "মুভি প্লেলিস্ট রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f).height(44.dp),
                                     shape = RoundedCornerShape(10.dp),

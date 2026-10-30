@@ -97,7 +97,8 @@ class MediaRepository(private val context: Context) {
                 "https://raw.githubusercontent.com/srhady/willow-event/refs/heads/main/primevideo_sports.m3u\n" +
                 "https://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/refs/heads/main/Sports_data.m3u\n" +
                 "https://raw.githubusercontent.com/srhady/axsports/refs/heads/main/playlist.m3u"
-        const val DEFAULT_TAPMAD_JSON_URL = "https://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/main/Sports_data.json\nhttps://raw.githubusercontent.com/sm-monirulislam/Tapmad_Auto_Update_Playlist/main/tapmad_data.json"
+        const val FANCODE_JSON_URL = "https://raw.githubusercontent.com/kajju027/Fancode-Events-Json/main/fancode.json"
+        const val DEFAULT_TAPMAD_JSON_URL = "$FANCODE_JSON_URL\nhttps://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/main/Sports_data.json\nhttps://raw.githubusercontent.com/sm-monirulislam/Tapmad_Auto_Update_Playlist/main/tapmad_data.json"
         const val DEFAULT_TAPMAD_M3U_URL = "https://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/main/Sports_data.m3u\nhttps://raw.githubusercontent.com/sm-monirulislam/Tapmad_Auto_Update_Playlist/refs/heads/main/tapmad_sm.m3u"
         const val DEFAULT_MOVIES_JSON_URL = "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/movies.json"
         const val DEFAULT_MOVIES_M3U_URL = DEFAULT_MOVIES_JSON_URL
@@ -2376,18 +2377,19 @@ class MediaRepository(private val context: Context) {
             firestoreObj.put("fields", fields)
             val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-            val primaryCol = collections.first()
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
-            for (dbId in databases) {
-                try {
-                    val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$primaryCol/${item.id}?key=$FIREBASE_API_KEY"
-                    val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
-                    val fsResp = client.newCall(fsReq).execute()
-                    if (fsResp.isSuccessful) {
-                        anySuccess = true
+            for (col in collections) {
+                for (dbId in databases) {
+                    try {
+                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$col/${item.id}?key=$FIREBASE_API_KEY"
+                        val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
+                        val fsResp = client.newCall(fsReq).execute()
+                        if (fsResp.isSuccessful) {
+                            anySuccess = true
+                        }
+                    } catch (e: Exception) {
+                        // continue
                     }
-                } catch (e: Exception) {
-                    // continue
                 }
             }
         } catch (e: Exception) {
@@ -5018,6 +5020,21 @@ class MediaRepository(private val context: Context) {
                     return@withContext liveFallback
                 }
             }
+            if (playlist.url.contains("fancode.json", ignoreCase = true) ||
+                (playlist.url.endsWith(".json", ignoreCase = true) && (playlist.url.contains("sport", ignoreCase = true) || playlist.url.contains("match", ignoreCase = true) || playlist.url.contains("event", ignoreCase = true) || playlist.url.contains("tapmad", ignoreCase = true)))
+            ) {
+                val sportsItems = fetchTapmadSportsMatches(jsonUrl = playlist.url)
+                if (sportsItems.isNotEmpty()) {
+                    saveCachedPlaylistChannels(playlist.id, sportsItems)
+                    return@withContext sportsItems
+                }
+            } else if (playlist.url.endsWith(".json", ignoreCase = true) || playlist.url.contains("movies.json", ignoreCase = true)) {
+                val movieItems = fetchMoviesFromJsonUrl(playlist.url)
+                if (movieItems.isNotEmpty()) {
+                    saveCachedPlaylistChannels(playlist.id, movieItems)
+                    return@withContext movieItems
+                }
+            }
             val m3uItems = parseM3uFromUrl(playlist.url)
             if (m3uItems.isNotEmpty()) {
                 saveCachedPlaylistChannels(playlist.id, m3uItems)
@@ -5593,6 +5610,9 @@ class MediaRepository(private val context: Context) {
         if (stored.isNullOrBlank()) {
             return DEFAULT_TAPMAD_JSON_URL
         }
+        if (!stored.contains("fancode.json", ignoreCase = true)) {
+            return "$FANCODE_JSON_URL\n$stored"
+        }
         return stored
     }
 
@@ -5920,10 +5940,10 @@ class MediaRepository(private val context: Context) {
                 for (i in 0 until matchesArr.length()) {
                     val mObj = matchesArr.optJSONObject(i) ?: continue
                     val entityId = mObj.optString("EntityId", "").ifBlank {
-                        mObj.optString("content_entity_id", mObj.optString("id", "${jsonIdx}_$i"))
+                        mObj.optString("match_id", mObj.optString("content_entity_id", mObj.optString("id", "${jsonIdx}_$i")))
                     }
                     val videoName = mObj.optString("VideoName", "").ifBlank {
-                        mObj.optString("event_name", mObj.optString("title", mObj.optString("name", "")))
+                        mObj.optString("title", mObj.optString("event_name", mObj.optString("name", "")))
                     }.trim()
                     if (videoName.isBlank()) continue
 
@@ -5931,16 +5951,16 @@ class MediaRepository(private val context: Context) {
                         mObj.optString("Category", mObj.optString("category", ""))
                     }.trim()
                     val stageName = mObj.optString("StageName", "").ifBlank {
-                        mObj.optString("header_name", mObj.optString("stage", ""))
+                        mObj.optString("tournament", mObj.optString("header_name", mObj.optString("stage", "")))
                     }.trim()
                     val eventStartDate = mObj.optString("EventStartDate", "").ifBlank {
-                        mObj.optString("start_time_bd", mObj.optString("start_time", mObj.optString("date", "")))
+                        mObj.optString("startTime", mObj.optString("start_time_bd", mObj.optString("start_time", mObj.optString("date", ""))))
                     }.trim()
                     val desc = mObj.optString("Description", "").ifBlank {
                         mObj.optString("description", "")
                     }.trim()
                     val thumbStd = (mObj.optString("ThumbnailStandard", "").ifBlank {
-                        mObj.optString("thumbnail", mObj.optString("logo", ""))
+                        mObj.optString("image", mObj.optString("thumbnail", mObj.optString("logo", "")))
                     }).trim().takeIf { it.isNotBlank() }
                     val thumbTv = (mObj.optString("ThumbnailTV", "").ifBlank {
                         mObj.optString("tv_image", mObj.optString("poster", ""))
@@ -6057,6 +6077,72 @@ class MediaRepository(private val context: Context) {
                                 fullSrvUrl = "$fullSrvUrl${sep}Referer=${java.net.URLEncoder.encode(ref, "UTF-8")}"
                             }
                             serversList.add(StreamServer(chName, fullSrvUrl))
+                        }
+                    }
+
+                    // 1.1 Streams JSONObject (FanCode JSON schema)
+                    val fcStreamsObj = mObj.optJSONObject("streams")
+                    if (fcStreamsObj != null) {
+                        val bdCdn = fcStreamsObj.optString("fancode_bd_cdn").trim()
+                        val primary = fcStreamsObj.optString("primary").trim()
+                        val inCdn = fcStreamsObj.optString("fancode_cdn").trim()
+                        val npCdn = fcStreamsObj.optString("fancode_np_cdn").trim()
+                        val lkCdn = fcStreamsObj.optString("fancode_lk_cdn").trim()
+
+                        val fcUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        val fcRef = "https://www.fancode.com/"
+                        fun addFcServer(srvTitle: String, rawUrl: String) {
+                            if (rawUrl.isBlank()) return
+                            val sep = if (rawUrl.contains("|")) "&" else "|"
+                            val fullUrl = "$rawUrl${sep}User-Agent=${java.net.URLEncoder.encode(fcUa, "UTF-8")}&Referer=${java.net.URLEncoder.encode(fcRef, "UTF-8")}"
+                            if (serversList.none { it.url.startsWith(rawUrl) }) {
+                                serversList.add(StreamServer(srvTitle, fullUrl))
+                            }
+                        }
+
+                        if (bdCdn.isNotBlank()) addFcServer("FanCode BD Server", bdCdn)
+                        if (primary.isNotBlank()) addFcServer("FanCode Primary (1080p)", primary)
+                        if (inCdn.isNotBlank()) addFcServer("FanCode Main CDN", inCdn)
+                        if (npCdn.isNotBlank()) addFcServer("FanCode Nepal Server", npCdn)
+                        if (lkCdn.isNotBlank()) addFcServer("FanCode Sri Lanka Server", lkCdn)
+                    }
+
+                    // 1.2 auto_streams resolutions & proxy (FanCode schema)
+                    val autoStreamsObj = mObj.optJSONObject("auto_streams")
+                    if (autoStreamsObj != null) {
+                        val langKeys = autoStreamsObj.keys()
+                        while (langKeys.hasNext()) {
+                            val lang = langKeys.next()
+                            val langData = autoStreamsObj.optJSONObject(lang) ?: continue
+                            val resStreams = langData.optJSONObject("streams")
+                            val fcUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                            val fcRef = "https://www.fancode.com/"
+                            fun addResServer(lbl: String, u: String) {
+                                if (u.isBlank()) return
+                                val sep = if (u.contains("|")) "&" else "|"
+                                val fullUrl = "$u${sep}User-Agent=${java.net.URLEncoder.encode(fcUa, "UTF-8")}&Referer=${java.net.URLEncoder.encode(fcRef, "UTF-8")}"
+                                if (serversList.none { it.url.startsWith(u) }) {
+                                    serversList.add(StreamServer(lbl, fullUrl))
+                                }
+                            }
+
+                            if (resStreams != null) {
+                                val r1080 = resStreams.optString("1080p").trim()
+                                val r720 = resStreams.optString("720p").trim()
+                                val r480 = resStreams.optString("480p").trim()
+                                val r360 = resStreams.optString("360p").trim()
+                                val r240 = resStreams.optString("240p").trim()
+
+                                if (r1080.isNotBlank()) addResServer("FanCode 1080p FHD ($lang)", r1080)
+                                if (r720.isNotBlank()) addResServer("FanCode 720p HD ($lang)", r720)
+                                if (r480.isNotBlank()) addResServer("FanCode 480p SD ($lang)", r480)
+                                if (r360.isNotBlank()) addResServer("FanCode 360p ($lang)", r360)
+                                if (r240.isNotBlank()) addResServer("FanCode 240p ($lang)", r240)
+                            }
+                            val proxyUrl = langData.optString("sonu_px").trim()
+                            if (proxyUrl.isNotBlank()) {
+                                addResServer("FanCode High-Speed Proxy ($lang)", proxyUrl)
+                            }
                         }
                     }
 
@@ -6185,50 +6271,102 @@ class MediaRepository(private val context: Context) {
 
     // Push remote configuration (Live TV M3U, Sports M3U, Movies M3U, Sports/Tapmad JSON API) to Firebase RTDB and Firestore
     suspend fun pushAppConfigToFirebase(
-        liveTvM3u: String = getSavedLiveTvM3uUrl(),
-        sportsM3u: String = getSavedSportsM3uUrl(),
-        moviesM3u: String = getSavedMoviesM3uUrl(),
-        tapmadJson: String = getSavedTapmadJsonUrl(),
+        liveTvM3u: String? = null,
+        sportsM3u: String? = null,
+        moviesM3u: String? = null,
+        tapmadJson: String? = null,
         url: String = getSavedFirebaseUrl()
     ): Boolean = withContext(Dispatchers.IO) {
         var success = false
-        // 1. Push to RTDB
+        val finalLiveTv = liveTvM3u ?: getSavedLiveTvM3uUrl()
+        val finalSports = sportsM3u ?: getSavedSportsM3uUrl()
+        val finalMovies = moviesM3u ?: getSavedMoviesM3uUrl()
+        val finalTapmad = tapmadJson ?: getSavedTapmadJsonUrl()
+
+        // 0. Update local storage immediately
+        if (liveTvM3u != null) saveLiveTvM3uUrl(liveTvM3u)
+        if (sportsM3u != null) saveSportsM3uUrl(sportsM3u)
+        if (moviesM3u != null) saveMoviesM3uUrl(moviesM3u)
+        if (tapmadJson != null) saveTapmadJsonUrl(tapmadJson)
+
+        // 1. Push to Firestore (Primary authoritative cloud store)
+        try {
+            val firestoreObj = JSONObject()
+            val fields = JSONObject()
+            val maskParams = mutableListOf<String>()
+
+            if (liveTvM3u != null) {
+                fields.put("liveTvM3uUrl", JSONObject().put("stringValue", liveTvM3u))
+                maskParams.add("updateMask.fieldPaths=liveTvM3uUrl")
+            } else {
+                fields.put("liveTvM3uUrl", JSONObject().put("stringValue", finalLiveTv))
+            }
+
+            if (sportsM3u != null) {
+                fields.put("sportsM3uUrl", JSONObject().put("stringValue", sportsM3u))
+                maskParams.add("updateMask.fieldPaths=sportsM3uUrl")
+            } else {
+                fields.put("sportsM3uUrl", JSONObject().put("stringValue", finalSports))
+            }
+
+            if (moviesM3u != null) {
+                fields.put("moviesM3uUrl", JSONObject().put("stringValue", moviesM3u))
+                maskParams.add("updateMask.fieldPaths=moviesM3uUrl")
+            } else {
+                fields.put("moviesM3uUrl", JSONObject().put("stringValue", finalMovies))
+            }
+
+            if (tapmadJson != null) {
+                fields.put("tapmadJsonUrl", JSONObject().put("stringValue", tapmadJson))
+                maskParams.add("updateMask.fieldPaths=tapmadJsonUrl")
+            } else {
+                fields.put("tapmadJsonUrl", JSONObject().put("stringValue", finalTapmad))
+            }
+
+            firestoreObj.put("fields", fields)
+            val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+            val maskQuery = if (maskParams.isNotEmpty()) {
+                "?" + maskParams.joinToString("&") + "&key=$FIREBASE_API_KEY"
+            } else {
+                "?key=$FIREBASE_API_KEY"
+            }
+
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val docPaths = listOf("settings/app_config", "app_config/global_config")
+            for (dbId in databases) {
+                for (docPath in docPaths) {
+                    try {
+                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$docPath$maskQuery"
+                        val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
+                        val fsResp = client.newCall(fsReq).execute()
+                        if (fsResp.isSuccessful) {
+                            success = true
+                            android.util.Log.d("MediaRepository", "Successfully pushed config to Firestore $dbId/$docPath")
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Best-effort mirror to RTDB (fail-safe)
         if (url.isNotBlank()) {
             try {
                 val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
                 val obj = JSONObject()
-                obj.put("liveTvM3uUrl", liveTvM3u)
-                obj.put("sportsM3uUrl", sportsM3u)
-                obj.put("moviesM3uUrl", moviesM3u)
-                obj.put("tapmadJsonUrl", tapmadJson)
+                obj.put("liveTvM3uUrl", finalLiveTv)
+                obj.put("sportsM3uUrl", finalSports)
+                obj.put("moviesM3uUrl", finalMovies)
+                obj.put("tapmadJsonUrl", finalTapmad)
                 val body = obj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
                 val targetUrl = appendRtdbAuth("$cleanUrl/app_config.json")
                 val req = Request.Builder().url(targetUrl).put(body).build()
-                val resp = client.newCall(req).execute()
-                if (resp.isSuccessful) success = true
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        // 2. Push to Firestore
-        try {
-            val firestoreObj = JSONObject()
-            val fields = JSONObject()
-            fields.put("liveTvM3uUrl", JSONObject().put("stringValue", liveTvM3u))
-            fields.put("sportsM3uUrl", JSONObject().put("stringValue", sportsM3u))
-            fields.put("moviesM3uUrl", JSONObject().put("stringValue", moviesM3u))
-            fields.put("tapmadJsonUrl", JSONObject().put("stringValue", tapmadJson))
-            firestoreObj.put("fields", fields)
-            val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
-            for (dbId in databases) {
-                val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/settings/app_config?key=$FIREBASE_API_KEY"
-                val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
-                val fsResp = client.newCall(fsReq).execute()
-                if (fsResp.isSuccessful) success = true
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+                client.newCall(req).execute()
+            } catch (_: Exception) {}
         }
         success
     }
@@ -6241,7 +6379,7 @@ class MediaRepository(private val context: Context) {
         var remoteTapmadJson: String? = null
 
         coroutineScope {
-            // 1. Fetch from Firestore
+            // 1. Fetch from Firestore (Authoritative Cloud Source)
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
             val fsJobs = databases.map { dbId ->
                 async {
@@ -6249,31 +6387,39 @@ class MediaRepository(private val context: Context) {
                     var fsSports: String? = null
                     var fsMovies: String? = null
                     var fsTapmad: String? = null
-                    try {
-                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/settings/app_config?key=$FIREBASE_API_KEY"
-                        val req = Request.Builder().url(fsUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
-                        val resp = client.newCall(req).execute()
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string() ?: ""
-                            if (body.isNotBlank() && body.startsWith("{")) {
-                                val json = JSONObject(body)
-                                val fields = json.optJSONObject("fields")
-                                if (fields != null) {
-                                    fsLiveTv = fields.optJSONObject("liveTvM3uUrl")?.optString("stringValue")
-                                    fsSports = fields.optJSONObject("sportsM3uUrl")?.optString("stringValue")
-                                    fsMovies = fields.optJSONObject("moviesM3uUrl")?.optString("stringValue")
-                                    fsTapmad = fields.optJSONObject("tapmadJsonUrl")?.optString("stringValue")
+                    val docPaths = listOf("settings/app_config", "app_config/global_config")
+                    for (docPath in docPaths) {
+                        try {
+                            val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$docPath?key=$FIREBASE_API_KEY"
+                            val req = Request.Builder().url(fsUrl).header("User-Agent", "NAFITV24-Android/2.5.0").build()
+                            val resp = client.newCall(req).execute()
+                            if (resp.isSuccessful) {
+                                val body = resp.body?.string() ?: ""
+                                if (body.isNotBlank() && body.startsWith("{")) {
+                                    val json = JSONObject(body)
+                                    val fields = json.optJSONObject("fields")
+                                    if (fields != null) {
+                                        val ltv = fields.optJSONObject("liveTvM3uUrl")?.optString("stringValue")
+                                        val sp = fields.optJSONObject("sportsM3uUrl")?.optString("stringValue")
+                                        val mov = fields.optJSONObject("moviesM3uUrl")?.optString("stringValue")
+                                        val tap = fields.optJSONObject("tapmadJsonUrl")?.optString("stringValue")
+
+                                        if (!ltv.isNullOrBlank()) fsLiveTv = ltv
+                                        if (!sp.isNullOrBlank()) fsSports = sp
+                                        if (!mov.isNullOrBlank()) fsMovies = mov
+                                        if (!tap.isNullOrBlank()) fsTapmad = tap
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                     listOf(fsLiveTv, fsSports, fsMovies, fsTapmad)
                 }
             }
 
-            // 2. Fetch from RTDB
+            // 2. Fetch from RTDB (Fallback Only)
             val rtdbJob = async {
                 var rtdbLiveTv: String? = null
                 var rtdbSports: String? = null
@@ -6311,10 +6457,11 @@ class MediaRepository(private val context: Context) {
                 if (!res[2].isNullOrBlank()) remoteMovies = res[2]
                 if (!res[3].isNullOrBlank()) remoteTapmadJson = res[3]
             }
-            if (!rtdbResult[0].isNullOrBlank()) remoteLiveTv = rtdbResult[0]
-            if (!rtdbResult[1].isNullOrBlank()) remoteSports = rtdbResult[1]
-            if (!rtdbResult[2].isNullOrBlank()) remoteMovies = rtdbResult[2]
-            if (!rtdbResult[3].isNullOrBlank()) remoteTapmadJson = rtdbResult[3]
+            // Only fallback to RTDB if Firestore is blank
+            if (remoteLiveTv.isNullOrBlank() && !rtdbResult[0].isNullOrBlank()) remoteLiveTv = rtdbResult[0]
+            if (remoteSports.isNullOrBlank() && !rtdbResult[1].isNullOrBlank()) remoteSports = rtdbResult[1]
+            if (remoteMovies.isNullOrBlank() && !rtdbResult[2].isNullOrBlank()) remoteMovies = rtdbResult[2]
+            if (remoteTapmadJson.isNullOrBlank() && !rtdbResult[3].isNullOrBlank()) remoteTapmadJson = rtdbResult[3]
         }
 
         if (remoteLiveTv != null || remoteSports != null || remoteMovies != null || remoteTapmadJson != null) {

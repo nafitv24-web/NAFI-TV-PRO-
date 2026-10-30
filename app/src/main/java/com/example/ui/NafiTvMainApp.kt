@@ -359,12 +359,20 @@ fun NafiTvMainApp(
                                 } ?: emptyList()
                             }
 
+                            val fbTvJob = async {
+                                try {
+                                    repository.fetchFromFirebase().filter { it.type == MediaType.LIVE_TV }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                } catch (_: Exception) { emptyList() }
+                            }
+
                             val customTv = repository.getCustomStreams().filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
                             val tvM3u = tvM3uJob.await()
                             val xtreamLiveChannels = xtreamLiveJob.await()
+                            val fbTv = fbTvJob.await()
 
                             val combinedTv = mutableListOf<MediaItem>()
                             combinedTv.addAll(customTv)
+                            combinedTv.addAll(fbTv)
                             combinedTv.addAll(tvM3u.filterNot { repository.isDemoChannel(it) })
                             combinedTv.addAll(xtreamLiveChannels.filterNot { repository.isDemoChannel(it) })
 
