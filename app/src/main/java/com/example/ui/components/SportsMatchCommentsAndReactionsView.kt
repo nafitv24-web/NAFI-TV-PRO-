@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -423,7 +422,7 @@ fun SportsMatchCommentsAndReactionsView(
                         verticalArrangement = Arrangement.spacedBy(7.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(comments, key = { idx, comment -> "${comment.id.ifBlank { "cmt" }}_$idx" }) { _, comment ->
+                        items(comments, key = { it.id }) { comment ->
                             // Real-time Shared User Comment bubble
                             Row(
                                 modifier = Modifier

@@ -405,7 +405,7 @@ fun PlaylistTabScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(filteredPlaylists, key = { index, pl -> "${pl.id.ifBlank { "pl" }}_$index" }) { index, pl ->
+                    itemsIndexed(filteredPlaylists, key = { index, pl -> if (pl.id.isNotBlank()) "${pl.id}_$index" else "pl_$index" }) { index, pl ->
                         PlaylistGridCard(
                             playlist = pl,
                             index = index,
@@ -742,7 +742,7 @@ fun PlaylistTabScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(filteredChannels, key = { index, item -> "${item.id.ifBlank { "pl_ch" }}_$index" }) { _, item ->
+                    itemsIndexed(filteredChannels, key = { index, item -> if (item.id.isNotBlank()) "${item.id}_${item.streamUrl.hashCode()}_$index" else "pl_ch_$index" }) { _, item ->
                         var isCardFocused by remember { mutableStateOf(false) }
                         val isActive = ChannelStatusManager.isChannelActive(item)
                         val isMovieOrSeriesItem = item.isSeries || item.type == com.example.model.MediaType.MOVIE || item.type == com.example.model.MediaType.SERIES

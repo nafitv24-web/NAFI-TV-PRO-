@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -237,7 +236,7 @@ fun VideoPlayerQuickDrawer(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(filteredEpisodes, key = { idx, ep -> "${ep.id.ifBlank { "ep" }}_$idx" }) { _, ep ->
+                        items(filteredEpisodes, key = { it.id }) { ep ->
                             val isCurrent = ep.id == currentMedia.id || (ep.seasonNum == currentMedia.currentSeasonNum && ep.episodeNum == currentMedia.currentEpisodeNum)
                             var isFocused by remember { mutableStateOf(false) }
 
@@ -372,7 +371,7 @@ fun VideoPlayerQuickDrawer(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(filteredDrawerPlaylist, key = { idx, item -> "${item.id.ifBlank { "ch" }}_$idx" }) { _, item ->
+                        items(filteredDrawerPlaylist, key = { it.id }) { item ->
                             val isCurrent = item.id == currentMedia.id
                             var isFocused by remember { mutableStateOf(false) }
 
