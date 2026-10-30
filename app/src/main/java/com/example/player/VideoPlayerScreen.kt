@@ -2182,6 +2182,8 @@ fun VideoPlayerScreen(
         )
     }
 
+    val isMovieContent = currentMedia.type == MediaType.MOVIE || currentMedia.type == MediaType.SERIES
+
     if (showPlayerSettingsDialog) {
         PlayerSettingsDialog(
             isAutoSwitchEnabled = isAutoSwitchOnFailureEnabled,
@@ -2190,6 +2192,7 @@ fun VideoPlayerScreen(
                 playerRepository.setAutoSwitchChannelOnFailure(nextState)
             },
             currentResolution = currentVideoResolution,
+            isMovie = isMovieContent,
             onOpenExternalPlayer = {
                 showPlayerSettingsDialog = false
                 showExternalPlayerDialog = true
@@ -2198,7 +2201,7 @@ fun VideoPlayerScreen(
         )
     }
 
-    if (showExternalPlayerDialog) {
+    if (showExternalPlayerDialog && isMovieContent) {
         com.example.ui.ExternalPlayerDialog(
             streamUrl = currentUrl,
             title = currentMedia.title,
@@ -2456,7 +2459,9 @@ fun VideoPlayerScreen(
                         isAutoSwitchOnFailureEnabled = nextState
                         playerRepository.setAutoSwitchChannelOnFailure(nextState)
                     },
-                    onOpenExternalPlayer = { showExternalPlayerDialog = true }
+                    onOpenExternalPlayer = if (isMovieContent) {
+                        { showExternalPlayerDialog = true }
+                    } else null
                 )
             }
 
@@ -2815,20 +2820,22 @@ fun VideoPlayerScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        // External Player Button (Televizo / VLC / NSP)
-                        IconButton(
-                            onClick = { showExternalPlayerDialog = true },
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF1E293B).copy(alpha = 0.85f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.OpenInNew,
-                                contentDescription = "External Player",
-                                tint = Color(0xFFA855F7),
-                                modifier = Modifier.size(15.dp)
-                            )
+                        // External Player Button (Televizo / VLC / NSP) - Only for Movies
+                        if (isMovieContent) {
+                            IconButton(
+                                onClick = { showExternalPlayerDialog = true },
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF1E293B).copy(alpha = 0.85f))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.OpenInNew,
+                                    contentDescription = "External Player",
+                                    tint = Color(0xFFA855F7),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
                         }
 
                         // Picture-in-Picture (PiP) Button
@@ -4786,6 +4793,7 @@ private fun PlayerSettingsDialog(
     isAutoSwitchEnabled: Boolean,
     onToggleAutoSwitch: (Boolean) -> Unit,
     currentResolution: String?,
+    isMovie: Boolean = false,
     onOpenExternalPlayer: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
@@ -4862,26 +4870,28 @@ private fun PlayerSettingsDialog(
                     }
                 }
 
-                // External Player Choice
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
-                    modifier = Modifier.clickable { onOpenExternalPlayer() }
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                // External Player Choice - Only for Movies
+                if (isMovie) {
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF8B5CF6).copy(alpha = 0.5f)),
+                        modifier = Modifier.clickable { onOpenExternalPlayer() }
                     ) {
-                        Icon(Icons.Rounded.SmartDisplay, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("পছন্দের এক্সটার্নাল প্লেয়ার", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                            Text("Televizo, Network Stream Player অথবা VLC-তে ওপেন করুন", color = Color(0xFF94A3B8), fontSize = 10.5.sp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Rounded.SmartDisplay, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(24.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("পছন্দের এক্সটার্নাল প্লেয়ার", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                Text("Televizo, Network Stream Player অথবা VLC-তে ওপেন করুন", color = Color(0xFF94A3B8), fontSize = 10.5.sp)
+                            }
+                            Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
                         }
-                        Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = Color(0xFFA855F7), modifier = Modifier.size(18.dp))
                     }
                 }
 
@@ -5218,13 +5228,15 @@ private fun FullscreenControlsOverlay(
                     )
                 }
 
-                // External Player Launcher (Televizo / VLC / NSP)
-                TvPlayerActionChip(
-                    icon = Icons.Rounded.OpenInNew,
-                    label = "এক্সটার্নাল প্লেয়ার",
-                    accentColor = Color(0xFFA855F7),
-                    onClick = onOpenExternalPlayer
-                )
+                // External Player Launcher (Televizo / VLC / NSP) - Only for Movies
+                if (media.type == MediaType.MOVIE || media.type == MediaType.SERIES) {
+                    TvPlayerActionChip(
+                        icon = Icons.Rounded.OpenInNew,
+                        label = "এক্সটার্নাল প্লেয়ার",
+                        accentColor = Color(0xFFA855F7),
+                        onClick = onOpenExternalPlayer
+                    )
+                }
 
                 // Download Movie / Video Button
                 val downloadContext = LocalContext.current
