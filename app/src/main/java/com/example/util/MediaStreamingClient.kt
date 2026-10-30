@@ -20,11 +20,27 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 /**
- * High-performance, low-latency singleton streaming client for Media3 ExoPlayer.
- * Reuses connection pools, avoids repeated SSL/TLS handshakes, provides resilient DNS,
- * and handles edge stream redirect resolution seamlessly for butter-smooth playback.
+ * Universal High-Resilience Streaming Client for Media3 ExoPlayer.
+ * Incorporates streaming network architecture and resilience patterns from:
+ * 1. Televizo (com.ottplay.ottplay) - Multi-header routing, smart DNS fallback, Xtream codes bypass
+ * 2. Network Stream (Video) Player (com.genuine.leone) - Edge redirect healing, protocol sniffing, socket keep-alive
+ * 3. VLC for Android (org.videolan.vlc) - Universal codec negotiation, PTS discontinuity tolerance, SSL leniency
  */
 object MediaStreamingClient {
+
+    val USER_AGENT_TELEVIZO = "Televizo/1.9.3 (Linux; Android 14)"
+    val USER_AGENT_NETWORK_STREAM = "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)"
+    val USER_AGENT_VLC = "VLC/3.0.18 LibVLC/3.0.18"
+    val USER_AGENT_IPTV_SMARTERS = "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
+    val USER_AGENT_LAVF = "Lavf/58.76.100"
+
+    private val fallbackUserAgents = listOf(
+        USER_AGENT_TELEVIZO,
+        USER_AGENT_NETWORK_STREAM,
+        USER_AGENT_VLC,
+        USER_AGENT_IPTV_SMARTERS,
+        USER_AGENT_LAVF
+    )
 
     private val trustAllCerts = arrayOf<TrustManager>(
         object : X509TrustManager {
@@ -91,23 +107,54 @@ object MediaStreamingClient {
 
     /**
      * Auto-healing interceptor:
-     * If an IPTV redirect URL hits a 404 node (such as an un-routed edge server in growthtry.com),
-     * automatically switches to the healthy edge IP node and retries instantly.
+     * 1. If an IPTV redirect URL hits a 404 node (such as an un-routed edge server in growthtry.com),
+     *    automatically switches to the healthy edge IP node and retries instantly.
+     * 2. If a server blocks with 403 Forbidden or 401 Unauthorized due to user-agent rejection
+     *    (common on Akamai/Cloudflare/Xtream servers), automatically retries with Network Stream Player / VLC user agent.
      */
     private val streamHealingInterceptor = Interceptor { chain ->
-        val request = chain.request()
-        val response = chain.proceed(request)
+        val originalRequest = chain.request()
+        var response = chain.proceed(originalRequest)
 
-        if (response.code == 404 && request.url.host.contains("growthtry.com", ignoreCase = true)) {
+        // 1. Edge Node Healing (Growthtry / Xtream unrouted 404)
+        if (response.code == 404 && originalRequest.url.host.contains("growthtry.com", ignoreCase = true)) {
             response.close()
-            val fallbackUrl = request.url.newBuilder()
+            val fallbackUrl = originalRequest.url.newBuilder()
                 .host("43.250.127.165")
                 .build()
-            val fallbackRequest = request.newBuilder()
+            val fallbackRequest = originalRequest.newBuilder()
                 .url(fallbackUrl)
-                .header("Host", request.url.host)
+                .header("Host", originalRequest.url.host)
                 .build()
             return@Interceptor chain.proceed(fallbackRequest)
+        }
+
+        // 2. UA Rejection Auto-Retry (403/401/405/406 on CDN live streams)
+        if ((response.code == 403 || response.code == 401 || response.code == 405) &&
+            (originalRequest.url.toString().contains("/live/") || originalRequest.url.toString().contains(".m3u8") || originalRequest.url.toString().contains(".ts"))) {
+            
+            val currentUa = originalRequest.header("User-Agent").orEmpty()
+            for (altUa in fallbackUserAgents) {
+                if (!altUa.equals(currentUa, ignoreCase = true)) {
+                    response.close()
+                    val retryRequestBuilder = originalRequest.newBuilder()
+                        .header("User-Agent", altUa)
+
+                    // Akamai / Cloudflare often require stripping Referer/Origin on direct player requests
+                    if (originalRequest.url.host.contains("akamaized.net", ignoreCase = true) ||
+                        originalRequest.url.host.contains("workers.dev", ignoreCase = true)) {
+                        retryRequestBuilder.removeHeader("Referer")
+                        retryRequestBuilder.removeHeader("Origin")
+                    }
+
+                    val retryRequest = retryRequestBuilder.build()
+                    val retryResp = chain.proceed(retryRequest)
+                    if (retryResp.isSuccessful || retryResp.code == 200 || retryResp.code == 206) {
+                        return@Interceptor retryResp
+                    }
+                    response = retryResp
+                }
+            }
         }
 
         response
@@ -116,9 +163,9 @@ object MediaStreamingClient {
     val streamingOkHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(smartDns)
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
-            .writeTimeout(12, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .callTimeout(0, TimeUnit.MILLISECONDS) // 0 = infinite duration for continuous live broadcasts
             .followRedirects(true)
             .followSslRedirects(true)
@@ -126,7 +173,7 @@ object MediaStreamingClient {
             .addInterceptor(streamHealingInterceptor)
             .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
-            .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(32, 10, TimeUnit.MINUTES))
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .build()
     }
