@@ -67,8 +67,6 @@ android {
     ndk {
       abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
     }
-
-    resourceConfigurations += listOf("en", "bn")
   }
 
   signingConfigs {
@@ -91,7 +89,7 @@ android {
     release {
       isCrunchPngs = true
       isMinifyEnabled = true
-      isShrinkResources = true
+      isShrinkResources = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }

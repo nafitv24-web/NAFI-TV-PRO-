@@ -62,23 +62,8 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                 // Background thread errors (network, ExoPlayer codecs, image loading, GC) -> suppress to keep app alive
                 Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
             } else {
-                // Main UI thread exception: Instead of allowing the system to show "NAFI TV Pro keeps stopping",
-                // cleanly restart MainActivity so the user stays smoothly inside the app without a crash dialog.
-                Log.e("NafiTvApp", "Main thread crash detected. Performing clean restart to prevent crash dialog: $msg", throwable)
-                try {
-                    val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                    }
-                    if (intent != null) {
-                        startActivity(intent)
-                    }
-                } catch (e: Exception) {
-                    Log.e("NafiTvApp", "Failed to restart MainActivity", e)
-                    defaultHandler?.uncaughtException(thread, throwable)
-                    return@setDefaultUncaughtExceptionHandler
-                }
-                android.os.Process.killProcess(android.os.Process.myPid())
-                System.exit(10)
+                Log.e("NafiTvApp", "Uncaught exception on UI thread: $msg", throwable)
+                defaultHandler?.uncaughtException(thread, throwable)
             }
         }
     }

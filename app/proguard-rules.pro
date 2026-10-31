@@ -6,10 +6,25 @@
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Keep app data models
--keep class com.example.model.** { *; }
--keep class com.example.data.** { *; }
+# Keep all application classes, composables, viewmodels, and managers completely intact
+-keep class com.example.** { *; }
+-keepclassmembers class com.example.** { *; }
+
+# Keep CloudStream plugin classes
 -keep class com.lagradost.cloudstream3.** { *; }
+-keepclassmembers class com.lagradost.cloudstream3.** { *; }
+
+# Keep Google Mobile Ads / AdMob classes
+-keep class com.google.android.gms.ads.** { *; }
+-keepclassmembers class com.google.android.gms.ads.** { *; }
+-keep class com.google.ads.** { *; }
+-keepclassmembers class com.google.ads.** { *; }
+
+# Jetpack Compose and Lifecycle
+-keep class androidx.compose.** { *; }
+-keepclassmembers class androidx.compose.** { *; }
+-keep class androidx.lifecycle.** { *; }
+-keepclassmembers class androidx.lifecycle.** { *; }
 
 # Media3 & ExoPlayer
 -keep class androidx.media3.** { *; }
