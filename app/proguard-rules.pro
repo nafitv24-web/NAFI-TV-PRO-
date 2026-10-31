@@ -22,6 +22,7 @@
 # OkHttp & Okio
 -dontwarn okhttp3.**
 -dontwarn okio.**
+-keep class okhttp3.** { *; }
 
 # Firebase & Google Play Services
 -keepattributes *JavascriptInterface*
@@ -29,7 +30,12 @@
     @com.google.firebase.firestore.** *;
 }
 -dontwarn com.google.android.gms.**
+-dontwarn com.google.firebase.**
 
 # Coil Image Loading
 -keep class coil.** { *; }
 -dontwarn coil.**
+
+# Suppress harmless warnings during R8 optimization
+-dontwarn **
+-ignorewarnings
