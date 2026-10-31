@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -347,7 +348,7 @@ fun ExtensionsManagementScreen(
                 }
 
                 // List of Repositories
-                items(repos, key = { it.id }) { repo ->
+                itemsIndexed(repos, key = { idx, repo -> "${repo.id.ifBlank { "repo" }}_$idx" }) { _, repo ->
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = Color(0xFF0F172A),
@@ -721,7 +722,7 @@ fun ExtensionsManagementScreen(
                 }
 
                 // Providers / Plugins items
-                items(plugins, key = { it.id }) { provider ->
+                itemsIndexed(plugins, key = { idx, provider -> "${provider.id.ifBlank { "plugin" }}_$idx" }) { _, provider ->
                     val isInstalling = installingProviderId == provider.id
 
                     Surface(

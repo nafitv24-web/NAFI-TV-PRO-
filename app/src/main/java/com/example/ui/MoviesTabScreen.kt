@@ -432,27 +432,7 @@ fun MoviesTabScreen(
         }
     }
 
-    // Background pre-fetcher for configured movie playlists and Xtream servers
-    LaunchedEffect(Unit) {
-        if (repository != null) {
-            withContext(Dispatchers.IO) {
-                try {
-                    val allPl = (repository.getAdminPlaylists() + repository.getUserPlaylists()).filter { it.isMovieOnly || it.isMoviePlaylist }
-                    for (pl in allPl) {
-                        if (repository.getCachedPlaylistMovies(pl.id).isEmpty()) {
-                            try { repository.fetchPlaylistMoviesOnly(pl) } catch (_: Exception) {}
-                        }
-                    }
-                    val allAcc = repository.getXtreamAccounts().filter { it.includeVod || it.includeSeries }
-                    for (acc in allAcc) {
-                        if (repository.getCachedXtreamAccountMovies(acc.id).isEmpty()) {
-                            try { repository.fetchXtreamAccountMovies(acc) } catch (_: Exception) {}
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-    }
+    // Hub movies are fetched on-demand when user clicks a specific hub or server (smooth & zero-lag)
 
     // 1. Instant Active Source Movies: initialized immediately so frame 0 is NEVER empty
     var activeSourceMovies by remember {
@@ -777,7 +757,7 @@ fun MoviesTabScreen(
                     }
 
                     // Dynamic OTT Platforms & Movie Servers (Only Admin Configured)
-                    items(adminHubs, key = { it.id }) { hub ->
+                    itemsIndexed(adminHubs, key = { idx, hub -> "${hub.id.ifBlank { "hub" }}_$idx" }) { _, hub ->
                         val isSelected = activeHubId == hub.id
                         OttCircularBrandIcon(
                             title = hub.title,
@@ -1331,7 +1311,7 @@ fun MoviesTabScreen(
                 // -----------------------------------------------------
                 // (B) CATEGORIZED HORIZONTAL CAROUSELS (Netflix Shelves)
                 // -----------------------------------------------------
-                items(categorizedMovies, key = { it.first }) { (categoryName, catMovies) ->
+                itemsIndexed(categorizedMovies, key = { idx, pair -> "${pair.first.ifBlank { "cat" }}_$idx" }) { _, (categoryName, catMovies) ->
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1372,7 +1352,7 @@ fun MoviesTabScreen(
                             contentPadding = PaddingValues(horizontal = 14.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            itemsIndexed(catMovies, key = { idx, movie -> if (movie.id.isNotBlank()) "${movie.id}_$idx" else "mov_$idx" }) { _, movie ->
+                            itemsIndexed(catMovies, key = { idx, movie -> "${movie.id.ifBlank { "mov" }}_$idx" }) { _, movie ->
                                 MoviePosterCard(
                                     movie = movie,
                                     isFav = favoriteIds.contains(movie.id),
@@ -1428,7 +1408,7 @@ fun MoviesTabScreen(
                     verticalArrangement = Arrangement.spacedBy(if (isTvMode) 14.dp else 10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    itemsIndexed(filteredMovies, key = { idx, movie -> if (movie.id.isNotBlank()) "${movie.id}_$idx" else "f_mov_$idx" }) { _, movie ->
+                    itemsIndexed(filteredMovies, key = { idx, movie -> "${movie.id.ifBlank { "f_mov" }}_$idx" }) { _, movie ->
                         MoviePosterCard(
                             movie = movie,
                             isFav = favoriteIds.contains(movie.id),

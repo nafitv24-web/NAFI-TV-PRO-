@@ -263,29 +263,28 @@ fun NafiTvMainApp(
         com.example.util.ChannelStatusManager.init(context)
     }
 
-    // State lists - Instant 0-second startup initialization from persistent cache / built-in defaults + custom streams
+    // State lists - Instant 0-millisecond startup initialization from fast memory / built-in defaults (butter-smooth)
     var sportsList by remember {
-        mutableStateOf(repository.getInitialSports())
+        mutableStateOf(repository.getDefaultBuiltinSports())
     }
     var liveTvList by remember {
-        mutableStateOf(repository.getInitialLiveTv())
+        mutableStateOf(repository.getDefaultBuiltinLiveTv())
     }
     var moviesList by remember {
-        mutableStateOf(repository.getInitialMoviesSeries())
+        mutableStateOf(repository.getDefaultBuiltinMovies())
     }
     var playlistsList by remember {
-        val nonMovie = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
+        mutableStateOf(repository.getInitialPlaylists().filterNot {
             it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-        }
-        mutableStateOf(nonMovie)
+        })
     }
-    var adminPlaylistsList by remember { mutableStateOf(repository.getInitialPlaylists() + repository.getAdminPlaylists()) }
-    var customList by remember { mutableStateOf(repository.getCustomStreams()) }
+    var adminPlaylistsList by remember { mutableStateOf(repository.getInitialPlaylists()) }
+    var customList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val allLiveChannels = remember(liveTvList, customList, m3uList) {
         liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
     }
-    var favoriteIds by remember { mutableStateOf(repository.getFavoriteIds()) }
+    var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var breakingNewsText by remember { mutableStateOf(repository.getMarqueeTickerText()) }
     var isRefreshing by remember { mutableStateOf(false) }
     var currentLoadingStage by remember { mutableStateOf(LoadingStage.IDLE) }
@@ -397,7 +396,7 @@ fun NafiTvMainApp(
                                 withContext(Dispatchers.Main) {
                                     liveTvList = updatedTv
                                 }
-                                repository.saveCachedLiveTvChannels(liveTvList)
+                                repository.saveCachedLiveTvChannels(updatedTv)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -503,7 +502,7 @@ fun NafiTvMainApp(
                                 withContext(Dispatchers.Main) {
                                     moviesList = combined
                                 }
-                                repository.saveCachedMoviesList(moviesList)
+                                repository.saveCachedMoviesList(combined)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -538,20 +537,18 @@ fun NafiTvMainApp(
                                 val fbTv = fbItems.filter { it.type == MediaType.LIVE_TV }
                                 val fbMov = fbItems.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES }
 
+                                val newSports = if (fbSports.isNotEmpty()) (fbSports + sportsList).distinctBy { it.id }.filterNot { repository.isItemDeleted(it) } else null
+                                val newTv = if (fbTv.isNotEmpty()) (liveTvList + fbTv).distinctBy { it.id }.filterNot { deleted.contains(it.id) } else null
+                                val newMov = if (fbMov.isNotEmpty()) (moviesList + fbMov).distinctBy { it.id }.filterNot { deleted.contains(it.id) }.sortedByDescending { it.movieSortWeight } else null
+
                                 withContext(Dispatchers.Main) {
-                                    if (fbSports.isNotEmpty()) {
-                                        sportsList = (fbSports + sportsList).distinctBy { it.id }.filterNot { repository.isItemDeleted(it) }
-                                        repository.saveCachedSportsMatches(sportsList)
-                                    }
-                                    if (fbTv.isNotEmpty()) {
-                                        liveTvList = (liveTvList + fbTv).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
-                                        repository.saveCachedLiveTvChannels(liveTvList)
-                                    }
-                                    if (fbMov.isNotEmpty()) {
-                                        moviesList = (moviesList + fbMov).distinctBy { it.id }.filterNot { deleted.contains(it.id) }.sortedByDescending { it.movieSortWeight }
-                                        repository.saveCachedMoviesList(moviesList)
-                                    }
+                                    if (newSports != null) sportsList = newSports
+                                    if (newTv != null) liveTvList = newTv
+                                    if (newMov != null) moviesList = newMov
                                 }
+                                if (newSports != null) repository.saveCachedSportsMatches(newSports)
+                                if (newTv != null) repository.saveCachedLiveTvChannels(newTv)
+                                if (newMov != null) repository.saveCachedMoviesList(newMov)
                             } catch (_: Exception) {}
 
                             // Firebase Xtream accounts & Movie Hub syncing
@@ -641,8 +638,29 @@ fun NafiTvMainApp(
     }
 
     LaunchedEffect(Unit) {
-        // Yield 350ms so Compose renders the immediate cached UI at full 60fps without any startup freeze
-        delay(350)
+        // 1. Load persistent disk cache asynchronously on Dispatchers.IO so frame 0 renders with 0ms delay like butter
+        withContext(Dispatchers.IO) {
+            val cachedTv = repository.getInitialLiveTv()
+            val cachedSports = repository.getInitialSports()
+            val cachedMovies = repository.getInitialMoviesSeries()
+            val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
+                it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+            }
+            val cachedAdminPl = repository.getInitialPlaylists() + repository.getAdminPlaylists()
+            val cachedCustom = repository.getCustomStreams()
+            val favs = repository.getFavoriteIds()
+            withContext(Dispatchers.Main) {
+                if (cachedTv.isNotEmpty()) liveTvList = cachedTv
+                if (cachedSports.isNotEmpty()) sportsList = cachedSports
+                if (cachedMovies.isNotEmpty()) moviesList = cachedMovies
+                playlistsList = cachedPl
+                adminPlaylistsList = cachedAdminPl
+                customList = cachedCustom
+                favoriteIds = favs
+            }
+        }
+        // 2. Graceful delay before network sync so user can immediately navigate with 60/120fps butter-smooth responsiveness
+        delay(1200)
         refreshAllData()
     }
 
@@ -3827,7 +3845,7 @@ fun EventsScreen(
             ) {
                 itemsIndexed(
                     filteredSports,
-                    key = { index, sport -> if (sport.id.isNotBlank()) "${sport.id}_$index" else "sport_$index" }
+                    key = { index, sport -> "${sport.id.ifBlank { "sport" }}_$index" }
                 ) { _, sport ->
                     LiveEventMatchCard(
                         sport = sport,

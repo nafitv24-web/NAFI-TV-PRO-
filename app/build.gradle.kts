@@ -63,6 +63,10 @@ android {
     versionName = "3.1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+    }
   }
 
   signingConfigs {
@@ -83,8 +87,9 @@ android {
 
   buildTypes {
     release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
+      isCrunchPngs = true
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -102,6 +107,21 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  packaging {
+    resources {
+      excludes += setOf(
+        "META-INF/DEPENDENCIES",
+        "META-INF/LICENSE",
+        "META-INF/LICENSE.txt",
+        "META-INF/license.txt",
+        "META-INF/NOTICE",
+        "META-INF/NOTICE.txt",
+        "META-INF/notice.txt",
+        "META-INF/ASL2.0",
+        "META-INF/*.kotlin_module"
+      )
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -149,9 +169,9 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer.hls)
   implementation(libs.androidx.media3.exoplayer.dash)
   implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
-  implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
+  // implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
   implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
-  implementation(libs.converter.moshi)
+  // implementation(libs.converter.moshi)
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
@@ -160,12 +180,12 @@ dependencies {
   implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.logging.interceptor)
+  // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.play.services.ads)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
+  // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
