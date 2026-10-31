@@ -67,6 +67,8 @@ android {
     ndk {
       abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
     }
+
+    resourceConfigurations += listOf("en", "bn")
   }
 
   signingConfigs {
@@ -125,6 +127,14 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a")
+      isUniversalApk = true
+    }
   }
 }
 

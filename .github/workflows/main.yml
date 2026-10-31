@@ -107,12 +107,20 @@ jobs:
       - name: Collect and Prepare Mobile APK
         run: |
           mkdir -p final-apk
-          if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-            cp -v app/build/outputs/apk/release/app-release.apk final-apk/NAFI-TV-24-Mobile-App.apk
-          elif [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            cp -v app/build/outputs/apk/debug/app-debug.apk final-apk/NAFI-TV-24-Mobile-App.apk
-          else
-            find . -name "*.apk" -not -path "*/.gradle/*" -exec cp -v {} final-apk/NAFI-TV-24-Mobile-App.apk \;
+          for f in $(find app/build/outputs/apk/release/ -name "*.apk" 2>/dev/null); do
+            bname=$(basename "$f")
+            if [[ "$bname" == *"arm64-v8a"* ]]; then
+              cp -v "$f" final-apk/NAFI-TV-24-Mobile-ARM64.apk
+            elif [[ "$bname" == *"armeabi-v7a"* ]]; then
+              cp -v "$f" final-apk/NAFI-TV-24-Mobile-ARMv7.apk
+            elif [[ "$bname" == *"universal"* ]]; then
+              cp -v "$f" final-apk/NAFI-TV-24-Mobile-Universal.apk
+            else
+              cp -v "$f" "final-apk/$bname"
+            fi
+          done
+          if [ -z "$(ls -A final-apk/*.apk 2>/dev/null)" ]; then
+            find app/build/outputs/apk/ -name "*.apk" -not -path "*/.gradle/*" -exec cp -v {} final-apk/ \;
           fi
           echo "Ready APK files:"
           ls -lh final-apk/
