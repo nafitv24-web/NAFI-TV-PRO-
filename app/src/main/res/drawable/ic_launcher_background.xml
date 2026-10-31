@@ -14,16 +14,10 @@
                 android:endX="108"
                 android:endY="108"
                 android:type="linear">
-                <item android:offset="0.0" android:color="#0D1117" />
-                <item android:offset="0.5" android:color="#161B22" />
-                <item android:offset="1.0" android:color="#0F172A" />
+                <item android:offset="0.0" android:color="#143454" />
+                <item android:offset="0.5" android:color="#10253E" />
+                <item android:offset="1.0" android:color="#0A1626" />
             </gradient>
         </aapt:attr>
     </path>
-    <!-- Subtle glow ring -->
-    <path
-        android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18"
-        android:strokeWidth="1.5"
-        android:strokeColor="#2200E5FF"
-        android:fillColor="#00000000" />
 </vector>
