@@ -278,6 +278,58 @@ object StalkerPortalManager {
     }
 
     /**
+     * Resolves a raw Stalker /live.php URL (e.g. from user input or playlist):
+     * e.g. "http://line.tivi-one.net/play/live.php?mac=A0:BB:3E:75:52:64&stream=373005&extension=m3u8"
+     * Performs MAG handshake and create_link to fetch the authorized play_token and direct TS stream.
+     */
+    suspend fun resolveLivePhpUrl(streamUrl: String): String = withContext(Dispatchers.IO) {
+        if (!streamUrl.contains("/play/live.php", ignoreCase = true) && !streamUrl.contains("mac=", ignoreCase = true)) {
+            return@withContext streamUrl
+        }
+        try {
+            val uri = Uri.parse(streamUrl)
+            val mac = uri.getQueryParameter("mac") ?: return@withContext streamUrl
+            val streamId = uri.getQueryParameter("stream") ?: return@withContext streamUrl
+            if (uri.getQueryParameter("play_token") != null) {
+                // Already has active play_token
+                return@withContext streamUrl
+            }
+
+            val host = uri.host ?: return@withContext streamUrl
+            val portPart = if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":${uri.port}" else ""
+            val scheme = uri.scheme ?: "http"
+            val portalUrl = "$scheme://$host$portPart"
+
+            val handshakeRes = handshake(portalUrl, mac)
+            val token = handshakeRes.getOrNull() ?: return@withContext streamUrl
+
+            val endpoint = normalizeLoadPhpUrl(portalUrl)
+            val linkUrl = "$endpoint?type=itv&action=create_link&cmd=ffmpeg%20http://localhost/ch/${streamId}_&JsHttpRequest=1-xml"
+
+            val req = Request.Builder()
+                .url(linkUrl)
+                .header("User-Agent", STALKER_USER_AGENT)
+                .header("X-User-Agent", "Model: MAG250; Link: Ethernet")
+                .header("Authorization", "Bearer $token")
+                .header("Cookie", "mac=$mac; stb_lang=en; timezone=Europe/Kiev;")
+                .get()
+                .build()
+
+            val res = httpClient.newCall(req).execute()
+            val body = res.body?.string().orEmpty()
+            val json = JSONObject(body)
+            val js = json.optJSONObject("js") ?: return@withContext streamUrl
+            val generatedCmd = js.optString("cmd", "").replace("ffmpeg ", "").replace("ffrt ", "").trim()
+            if (generatedCmd.startsWith("http", ignoreCase = true)) {
+                return@withContext generatedCmd
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return@withContext streamUrl
+    }
+
+    /**
      * Resolves a dynamic live streaming token and direct URL for a Stalker channel
      */
     suspend fun resolveStreamUrl(portalUrl: String, macAddress: String, cmd: String): String? = withContext(Dispatchers.IO) {

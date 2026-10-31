@@ -217,6 +217,24 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Automatically resolve raw Stalker / Ministra live.php URLs (e.g. line.tivi-one.net) to authorized play_tokens
+    LaunchedEffect(currentUrl) {
+        val raw = currentUrl
+        if ((raw.contains("/play/live.php", ignoreCase = true) || raw.contains("mac=", ignoreCase = true)) &&
+            !raw.contains("play_token=", ignoreCase = true)) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    val resolved = com.example.util.StalkerPortalManager.resolveLivePhpUrl(raw)
+                    if (resolved.isNotBlank() && resolved != raw) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            currentUrl = resolved
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
 
     // Record user live presence & streaming activity
     LaunchedEffect(currentMedia.id, currentMedia.title) {
@@ -865,6 +883,26 @@ fun VideoPlayerScreen(
             if (extractedUa.isNullOrBlank()) extractedUa = "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
         }
 
+        val isStalkerStream = finalCleanUrl.contains("/play/live.php", ignoreCase = true) ||
+                (finalCleanUrl.contains("mac=", ignoreCase = true) && finalCleanUrl.contains("stream=", ignoreCase = true)) ||
+                finalCleanUrl.contains("tivi-one", ignoreCase = true)
+
+        val stalkerMacInUrl = if (isStalkerStream) {
+            try { android.net.Uri.parse(finalCleanUrl).getQueryParameter("mac") } catch (_: Exception) { null }
+        } else null
+
+        if (isStalkerStream) {
+            if (extractedUa.isNullOrBlank()) {
+                extractedUa = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
+            }
+            dynamicHeaders["X-User-Agent"] = "Model: MAG250; Link: Ethernet"
+            if (!stalkerMacInUrl.isNullOrBlank()) {
+                extractedCookie = "mac=$stalkerMacInUrl; stb_lang=en; timezone=Europe/Kiev;"
+            }
+            extractedReferer = null
+            extractedOrigin = null
+        }
+
         val isMovieLinkBd = finalCleanUrl.contains("movielinkbd", ignoreCase = true) ||
                 finalCleanUrl.contains("mlbd", ignoreCase = true) ||
                 finalCleanUrl.contains("fsldownload", ignoreCase = true) ||
@@ -899,15 +937,19 @@ fun VideoPlayerScreen(
                 finalCleanUrl.contains("growthtry", ignoreCase = true) ||
                 finalCleanUrl.contains("my-king", ignoreCase = true) ||
                 finalCleanUrl.contains("zerotv", ignoreCase = true) ||
+                isStalkerStream ||
                 isRgkkw
 
         val isTsStream = !isMovieFormat && !isMovieLinkBd && (pathBeforeQuery.endsWith(".ts") ||
                 finalCleanUrl.contains(".ts?", ignoreCase = true) ||
                 finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
                 finalCleanUrl.contains("output=ts", ignoreCase = true) ||
+                finalCleanUrl.contains("extension=ts", ignoreCase = true) ||
+                isStalkerStream ||
                 ((isXtreamStream || isRgkkw) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true)))
 
         val primaryUa = when {
+            isStalkerStream -> "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
             isTapmad -> "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)"
             !extractedUa.isNullOrBlank() -> extractedUa!!
             isToffee -> "Toffee (Linux;Android 14)"
@@ -918,6 +960,13 @@ fun VideoPlayerScreen(
 
         // Multi-Agent fallback list for maximum online stream compatibility
         val fallbackUserAgents = when {
+            isStalkerStream -> listOf(
+                "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+                "VLC/3.0.18 LibVLC/3.0.18",
+                "TiviMate/4.7.0 (Android TV)",
+                "Lavf/58.76.100",
+                "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
+            ).distinct()
             isTapmad -> listOf(
                 "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)",
                 "ExoPlayerLib/2.19.1 (Linux; Android 14; Mobile)",
@@ -1245,6 +1294,8 @@ fun VideoPlayerScreen(
                         finalCleanUrl.contains(".ts?", ignoreCase = true) ||
                         finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
                         finalCleanUrl.contains("output=ts", ignoreCase = true) ||
+                        finalCleanUrl.contains("extension=ts", ignoreCase = true) ||
+                        isStalkerStream ||
                         ((isRgkkw || isXtreamStream) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true))
                 )
 
@@ -1482,19 +1533,20 @@ fun VideoPlayerScreen(
                                 error.cause is androidx.media3.common.ParserException ||
                                 error.cause is androidx.media3.exoplayer.source.UnrecognizedInputFormatException
 
-                        // 1. Xtream MPEG-TS vs HLS fast swap (single immediate fallback)
+                        // 1. Xtream / Stalker MPEG-TS vs HLS fast swap (single immediate fallback)
                         val isProtectHls = currentUrl.contains("toffeelive.com", ignoreCase = true) ||
                                 currentUrl.contains("toffee", ignoreCase = true) ||
                                 currentUrl.contains("akamaized.net", ignoreCase = true) ||
                                 currentUrl.contains("tapmad", ignoreCase = true)
                         val isRgkkwCurrent = currentUrl.contains("rgkkw", ignoreCase = true)
-                        if (!isProtectHls && !isRgkkwCurrent && currentUrl.contains("/live/") && currentUrl.contains(".ts", ignoreCase = true) && playerRetryKey == 0) {
-                            currentUrl = currentUrl.replace(".ts", ".m3u8", ignoreCase = true)
+                        val isStalkerOrLive = currentUrl.contains("/live/") || currentUrl.contains("/play/live.php") || currentUrl.contains("mac=")
+                        if (!isProtectHls && !isRgkkwCurrent && isStalkerOrLive && (currentUrl.contains(".ts", ignoreCase = true) || currentUrl.contains("extension=ts", ignoreCase = true)) && playerRetryKey == 0) {
+                            currentUrl = currentUrl.replace(".ts", ".m3u8", ignoreCase = true).replace("extension=ts", "extension=m3u8", ignoreCase = true)
                             playerRetryKey = 1
                             errorMessage = null
                             return
-                        } else if (!isProtectHls && currentUrl.contains("/live/") && currentUrl.contains(".m3u8", ignoreCase = true) && playerRetryKey == 0) {
-                            currentUrl = currentUrl.replace(".m3u8", ".ts", ignoreCase = true)
+                        } else if (!isProtectHls && isStalkerOrLive && (currentUrl.contains(".m3u8", ignoreCase = true) || currentUrl.contains("extension=m3u8", ignoreCase = true)) && playerRetryKey == 0) {
+                            currentUrl = currentUrl.replace(".m3u8", ".ts", ignoreCase = true).replace("extension=m3u8", "extension=ts", ignoreCase = true)
                             playerRetryKey = 1
                             errorMessage = null
                             return

@@ -129,16 +129,34 @@ object MediaStreamingClient {
             return@Interceptor chain.proceed(fallbackRequest)
         }
 
-        // 2. UA Rejection Auto-Retry (403/401/405/406 on CDN live streams)
-        if ((response.code == 403 || response.code == 401 || response.code == 405) &&
-            (originalRequest.url.toString().contains("/live/") || originalRequest.url.toString().contains(".m3u8") || originalRequest.url.toString().contains(".ts"))) {
-            
+        // 2. UA Rejection Auto-Retry (403/401/405/406/407/461 on CDN & Stalker live streams)
+        val isStreamingUrl = originalRequest.url.toString().contains("/live/") ||
+                originalRequest.url.toString().contains("/play/live.php") ||
+                originalRequest.url.toString().contains("mac=") ||
+                originalRequest.url.toString().contains(".m3u8") ||
+                originalRequest.url.toString().contains(".ts")
+
+        if ((response.code in listOf(400, 401, 403, 405, 406, 407, 461, 503)) && isStreamingUrl) {
             val currentUa = originalRequest.header("User-Agent").orEmpty()
-            for (altUa in fallbackUserAgents) {
+            val stalkerUa = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
+            val allFallbackUas = listOf(stalkerUa) + fallbackUserAgents
+
+            for (altUa in allFallbackUas) {
                 if (!altUa.equals(currentUa, ignoreCase = true)) {
                     response.close()
                     val retryRequestBuilder = originalRequest.newBuilder()
                         .header("User-Agent", altUa)
+
+                    // Stalker & CDN Proxy healing
+                    if (originalRequest.url.toString().contains("mac=") || originalRequest.url.toString().contains("tivi-one")) {
+                        retryRequestBuilder.header("X-User-Agent", "Model: MAG250; Link: Ethernet")
+                        retryRequestBuilder.removeHeader("Referer")
+                        retryRequestBuilder.removeHeader("Origin")
+                        val mac = try { android.net.Uri.parse(originalRequest.url.toString()).getQueryParameter("mac") } catch (_: Exception) { null }
+                        if (!mac.isNullOrBlank()) {
+                            retryRequestBuilder.header("Cookie", "mac=$mac; stb_lang=en; timezone=Europe/Kiev;")
+                        }
+                    }
 
                     // Akamai / Cloudflare often require stripping Referer/Origin on direct player requests
                     if (originalRequest.url.host.contains("akamaized.net", ignoreCase = true) ||
@@ -149,7 +167,7 @@ object MediaStreamingClient {
 
                     val retryRequest = retryRequestBuilder.build()
                     val retryResp = chain.proceed(retryRequest)
-                    if (retryResp.isSuccessful || retryResp.code == 200 || retryResp.code == 206) {
+                    if (retryResp.isSuccessful || retryResp.code in 200..308) {
                         return@Interceptor retryResp
                     }
                     response = retryResp
