@@ -5529,7 +5529,7 @@ class MediaRepository(private val context: Context) {
     }
 
     fun isAutoSwitchChannelOnFailure(): Boolean {
-        return prefs.getBoolean("auto_switch_channel_on_failure", false)
+        return prefs.getBoolean("auto_switch_channel_on_failure", true)
     }
 
     fun setAutoSwitchChannelOnFailure(enabled: Boolean) {

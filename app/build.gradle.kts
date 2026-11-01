@@ -59,8 +59,8 @@ android {
     applicationId = "com.aistudio.nafitv.yxosih"
     minSdk = 24
     targetSdk = 36
-    versionCode = 28
-    versionName = "3.1.2"
+    versionCode = 27
+    versionName = "3.1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -89,7 +89,7 @@ android {
     release {
       isCrunchPngs = true
       isMinifyEnabled = true
-      isShrinkResources = true
+      isShrinkResources = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -175,6 +175,7 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer.dash)
   implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
   // implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
+  implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
   // implementation(libs.converter.moshi)
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.firestore)

@@ -181,9 +181,9 @@ object MediaStreamingClient {
     val streamingOkHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(smartDns)
-            .connectTimeout(8, TimeUnit.SECONDS) // Fast fail-fast connection setup
-            .readTimeout(20, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .callTimeout(0, TimeUnit.MILLISECONDS) // 0 = infinite duration for continuous live broadcasts
             .followRedirects(true)
             .followSslRedirects(true)
@@ -191,7 +191,7 @@ object MediaStreamingClient {
             .addInterceptor(streamHealingInterceptor)
             .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
-            .connectionPool(ConnectionPool(64, 10, TimeUnit.MINUTES))
+            .connectionPool(ConnectionPool(32, 10, TimeUnit.MINUTES))
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .build()
     }

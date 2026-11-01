@@ -463,7 +463,7 @@ fun VideoPlayerScreen(
     // Smooth debounce for buffering overlay so micro network fluctuations don't flash intrusive cards over active video
     LaunchedEffect(isBuffering, hasStartedPlaying) {
         if (isBuffering) {
-            val waitDelay = if (hasStartedPlaying) 1500L else 120L
+            val waitDelay = if (hasStartedPlaying) 800L else 150L
             delay(waitDelay)
             if (isBuffering) {
                 isActuallyBuffering = true
@@ -1133,17 +1133,32 @@ fun VideoPlayerScreen(
                 eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
                 out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
             ) {
-                // Hardware/Platform MediaCodec Audio Renderer with decoder fallback
+                // 1. Hardware/Platform MediaCodec Audio Renderer with decoder fallback
                 out.add(
                     androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
                         context,
                         mediaCodecSelector,
-                        true,
+                        enableDecoderFallback,
                         eventHandler,
                         eventListener,
                         audioSink
                     )
                 )
+
+                // 2. FFmpeg Audio Renderer for MP2, MP1, AC3, EAC3, TrueHD, DTS, Opus, Vorbis, FLAC, ALAC, etc.
+                try {
+                    if (androidx.media3.decoder.ffmpeg.FfmpegLibrary.isAvailable()) {
+                        out.add(
+                            androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer(
+                                eventHandler,
+                                eventListener,
+                                audioSink
+                            )
+                        )
+                    }
+                } catch (t: Throwable) {
+                    android.util.Log.w("VideoPlayer", "FFmpeg audio renderer init fallback", t)
+                }
             }
 
             override fun buildVideoRenderers(
@@ -1157,7 +1172,8 @@ fun VideoPlayerScreen(
                 out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
             ) {
                 // Delegate to super to ensure DefaultMediaCodecAdapterFactory (asynchronous MediaCodec)
-                // is properly configured and decoder fallback is enabled with 15s joining time
+                // is properly configured and software extension renderers are registered,
+                // while guaranteeing 15 seconds video joining tolerance and enabling decoder fallback.
                 super.buildVideoRenderers(
                     context,
                     extensionRendererMode,
@@ -1170,6 +1186,7 @@ fun VideoPlayerScreen(
                 )
             }
         }.apply {
+            setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             setEnableDecoderFallback(true)
             setEnableAudioFloatOutput(false)
             setEnableAudioTrackPlaybackParams(true)
@@ -1177,13 +1194,13 @@ fun VideoPlayerScreen(
         }
 
         // High-responsiveness Adaptive Bitrate Track Selection:
-        // Automatically steps down resolution in 150ms if bandwidth drops to prevent any buffering stalls,
+        // Automatically steps down resolution in 300ms if bandwidth drops to prevent any buffering stalls,
         // and upgrades smoothly to HD when network throughput is proven stable.
         val adaptiveTrackSelectionFactory = androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
-            /* minDurationForQualityIncreaseMs = */ 4000,
-            /* maxDurationForQualityDecreaseMs = */ 150,  // 150ms ultra-rapid downscaling on network drop to prevent stalls
-            /* minDurationToRetainAfterDiscardMs = */ 1500,
-            /* bandwidthFraction = */ 0.75f               // 75% bandwidth headroom prevents buffer exhaustion
+            /* minDurationForQualityIncreaseMs = */ 6000, // 6s sustained speed before upgrading
+            /* maxDurationForQualityDecreaseMs = */ 300,  // 300ms ultra-rapid downscaling on network drop to prevent stalls
+            /* minDurationToRetainAfterDiscardMs = */ 3000,
+            /* bandwidthFraction = */ 0.70f               // 70% bandwidth headroom prevents buffer exhaustion
         )
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context, adaptiveTrackSelectionFactory).apply {
@@ -1207,24 +1224,26 @@ fun VideoPlayerScreen(
         val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRamDevice = actManager?.isLowRamDevice == true || (Runtime.getRuntime().maxMemory() / (1024 * 1024)) <= 128
 
-        // Ultra-low latency, zero-buffering LoadControl: starts playback in 50ms without waiting for chunks
+        // Memory-safe, high-speed, anti-buffering LoadControl tuned for all devices down to 512MB RAM
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, if (isLowRamDevice) 32 * 1024 else 64 * 1024))
             .setBufferDurationsMs(
-                /* minBufferMs = */ if (isLiveStream) 1200 else if (isLowRamDevice) 1500 else 3000,
-                /* maxBufferMs = */ if (isLiveStream) 5000 else if (isLowRamDevice) 4000 else 12000,
-                /* bufferForPlaybackMs = */ if (isLiveStream) 50 else 100,
-                /* bufferForPlaybackAfterRebufferMs = */ if (isLiveStream) 150 else 250
+                /* minBufferMs = */ if (isLowRamDevice) 2000 else if (isAkr4m) 8000 else if (isLiveStream) 4000 else 6000,
+                /* maxBufferMs = */ if (isLowRamDevice) 6000 else if (isAkr4m) 20000 else if (isLiveStream) 15000 else 25000,
+                /* bufferForPlaybackMs = */ 250,
+                /* bufferForPlaybackAfterRebufferMs = */ 500
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(0, false)
+            .setBackBuffer(if (isLiveStream || isLowRamDevice) 0 else 5000, false)
             .setTargetBufferBytes(
                 if (isLowRamDevice) {
-                    if (isLiveStream) 2 * 1024 * 1024 else 4 * 1024 * 1024
+                    if (isLiveStream) 4 * 1024 * 1024 else 6 * 1024 * 1024
+                } else if (isAkr4m) {
+                    18 * 1024 * 1024
                 } else if (isLiveStream) {
-                    6 * 1024 * 1024
+                    12 * 1024 * 1024
                 } else {
-                    16 * 1024 * 1024
+                    24 * 1024 * 1024
                 }
             )
             .build()
@@ -1295,14 +1314,17 @@ fun VideoPlayerScreen(
                 val isTs = isExplicitTs
 
                 if (isLiveStream && !isTs) {
-                    // Ultra-low latency target: bufferless live playback right at the latest edge
+                    // Safe target live offset: tuned for HLS/DASH manifest streams
+                    val targetLiveOffset = if (isWorkersDev) 3000L else if (isAkr4m) 22000L else 15000L
+                    val minOffset = if (isWorkersDev) 1500L else if (isAkr4m) 10000L else 6000L
+                    val maxOffset = if (isWorkersDev) 8000L else 60000L
                     mediaItemBuilder.setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setTargetOffsetMs(1500L)
-                            .setMinOffsetMs(500L)
-                            .setMaxOffsetMs(4000L)
-                            .setMinPlaybackSpeed(0.98f)
-                            .setMaxPlaybackSpeed(1.04f)
+                            .setTargetOffsetMs(targetLiveOffset)
+                            .setMinOffsetMs(minOffset)
+                            .setMaxOffsetMs(maxOffset)
+                            .setMinPlaybackSpeed(1.0f)
+                            .setMaxPlaybackSpeed(1.01f)
                             .build()
                     )
                 }
@@ -1348,7 +1370,6 @@ fun VideoPlayerScreen(
                                 isBuffering = false
                                 isActuallyBuffering = false
                                 hasStartedPlaying = true
-                                playerRetryKey = 0
                                 errorMessage = null
                                 isPlaying = playWhenReady
                                 val dur = duration
@@ -1363,14 +1384,14 @@ fun VideoPlayerScreen(
                                     playNextEpisode()
                                 } else if (isLiveStream || isTs || isTsStream || isXtreamStream) {
                                     // Seamless live stream auto-reconnect: IPTV servers may disconnect TCP after a few seconds or on micro-packet drops.
-                                    // A live broadcast never has an EOF! Reconnect in 200ms without freezing or stopping.
+                                    // A live broadcast never has an EOF! Reconnect in 250ms without freezing or stopping.
                                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                         try {
                                             seekToDefaultPosition()
                                             prepare()
                                             playWhenReady = true
                                         } catch (_: Exception) {}
-                                    }, 200L)
+                                    }, 250L)
                                 }
                             }
                             Player.STATE_IDLE -> {
@@ -1390,7 +1411,6 @@ fun VideoPlayerScreen(
                         isBuffering = false
                         isActuallyBuffering = false
                         hasStartedPlaying = true
-                        playerRetryKey = 0
                         com.example.util.ChannelStatusManager.markChannelSuccess(currentMedia.id)
                         com.example.util.ChannelStatusManager.markServerSuccess(currentUrl)
                     }
@@ -1501,22 +1521,6 @@ fun VideoPlayerScreen(
                             error.cause is androidx.media3.exoplayer.source.BehindLiveWindowException) {
                             seekToDefaultPosition()
                             prepare()
-                            playWhenReady = true
-                            return
-                        }
-
-                        // Seamless auto-reconnect on active live channel:
-                        // If the channel was already playing and suffers a temporary network or CDN drop,
-                        // DO NOT leave the channel! Reconnect cleanly to the current stream.
-                        if (hasStartedPlaying && playerRetryKey < 4) {
-                            playerRetryKey++
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                try {
-                                    seekToDefaultPosition()
-                                    prepare()
-                                    playWhenReady = true
-                                } catch (_: Exception) {}
-                            }, 350L)
                             return
                         }
                         val currentServers = currentMedia.getAllServers()
@@ -1610,28 +1614,33 @@ fun VideoPlayerScreen(
                             return
                         }
 
-                        // 3. If multiple servers exist and all were exhausted, cycle back to Server 1 of the same channel
-                        if (allServers.size > 1 && selectedServerIndex >= allServers.size - 1 && playerRetryKey < 2) {
-                            playerRetryKey++
-                            pendingServerSwitchIndex = 0
+                        // 3. All servers exhausted or single server failed -> Instant Auto-Skip to next channel (only for Live TV/Events):
+                        val activeServerName = currentServers.getOrNull(selectedServerIndex)?.name?.takeIf { it.isNotBlank() } ?: "সার্ভার ${selectedServerIndex + 1}"
+                        if (isAutoSwitchOnFailureEnabled && (currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT)) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "⚠️ '${currentMedia.title}' সংযোগ করা যায়নি। পরবর্তী চ্যানেলে যাওয়া হচ্ছে...",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
                             errorMessage = null
+                            playerRetryKey = 0
+                            forceWebEngine = false
+                            pendingChannelSwitchDelta = 1
                             return
                         }
-
-                        // 4. Keep user on their chosen channel and display clear status with retry affordance
-                        val activeServerName = currentServers.getOrNull(selectedServerIndex)?.name?.takeIf { it.isNotBlank() } ?: "সার্ভার ${selectedServerIndex + 1}"
-                        errorMessage = "$activeServerName: ভিডিও সংযোগ ব্যাহত হয়েছে। বিকল্প সার্ভার বেছে নিন অথবা পুনরায় চেষ্টা করুন।"
+                        errorMessage = "$activeServerName: ভিডিও সংযোগ করা সম্ভব হয়নি। বিকল্প সার্ভার বেছে নিন অথবা পুনরায় চেষ্টা করুন।"
                     }
                 })
             }
     }
 
-    // Dead / Unplayable Channel Watchdog on initial load:
-    // If a selected channel has never started playing within 12 seconds,
-    // tries the next alternative server of the SAME channel if available, but NEVER auto-switches away to another channel
+    // Dead / Unplayable Channel Auto-Skip Watchdog:
+    // If a selected channel hangs or fails to play within 4.5 seconds (or if stream link is blank),
+    // automatically and forcibly skips to the next server or next channel without waiting for user permission!
     val isChannelOrLive = currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT
-    LaunchedEffect(currentMedia.id, currentUrl, hasStartedPlaying) {
-        if (!hasStartedPlaying && isChannelOrLive) {
+    LaunchedEffect(currentMedia.id, currentUrl, hasStartedPlaying, isAutoSwitchOnFailureEnabled) {
+        if (!hasStartedPlaying && isAutoSwitchOnFailureEnabled && isChannelOrLive) {
+            // Immediate check: if stream URL is blank, skip without waiting
             if (currentUrl.isBlank()) {
                 delay(800)
                 if (!hasStartedPlaying) {
@@ -1642,13 +1651,14 @@ fun VideoPlayerScreen(
                         android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                         pendingServerSwitchIndex = nextIdx
                     } else {
-                        errorMessage = "এই চ্যানেলের স্ট্রিমিং লিঙ্ক খালি। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন।"
+                        android.widget.Toast.makeText(context, "⚠️ '${currentMedia.title}' লিংক নেই। পরবর্তী চ্যানেলে যাওয়া হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
+                        pendingChannelSwitchDelta = 1
                     }
                 }
                 return@LaunchedEffect
             }
 
-            // Resilient connection timeout: 12 seconds
+            // Resilient connection timeout: 12.0 seconds (matches Televizo / VLC timeout for slower 3G/4G networks)
             delay(12000)
             if (!hasStartedPlaying) {
                 val allServers = currentMedia.getAllServers()
@@ -1658,7 +1668,15 @@ fun VideoPlayerScreen(
                     android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                     pendingServerSwitchIndex = nextIdx
                 } else {
-                    errorMessage = "চ্যানেল সংযোগে বিলম্ব হচ্ছে। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন অথবা পুনরায় চেষ্টা করুন।"
+                    android.widget.Toast.makeText(
+                        context,
+                        "⚠️ '${currentMedia.title}' চ্যানেলটি সচল নয়। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেলে যাওয়া হচ্ছে...",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    errorMessage = null
+                    playerRetryKey = 0
+                    forceWebEngine = false
+                    pendingChannelSwitchDelta = 1
                 }
             }
         }
@@ -1680,8 +1698,7 @@ fun VideoPlayerScreen(
             }
 
             // Live Stream Anti-Buffering & Anti-Stall Watchdog:
-            // Live Stream Anti-Stall Auto-Recovery:
-            // Safely detects genuine network connection drops without disrupting active playback
+            // Detects if server stopped sending packets after a few seconds and automatically resumes playback
             if (isCurrentItemLive && hasStartedPlaying) {
                 val isBuff = try { exoPlayer.playbackState == Player.STATE_BUFFERING } catch (_: Exception) { false }
                 val isPlay = try { exoPlayer.isPlaying } catch (_: Exception) { false }
@@ -1693,10 +1710,9 @@ fun VideoPlayerScreen(
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = true
                     } catch (_: Exception) {}
-                } else if (isBuff && !isPlay) {
+                } else if (isBuff || (isPlay && cur == lastPlayPos && cur > 0)) {
                     frozenTicks++
-                    // Only intervene if genuinely stuck buffering for 15 seconds (30 ticks * 500ms)
-                    if (frozenTicks >= 30) {
+                    if (frozenTicks >= 6) { // 3 seconds of freeze detected
                         frozenTicks = 0
                         try {
                             exoPlayer.seekToDefaultPosition()
@@ -1707,6 +1723,7 @@ fun VideoPlayerScreen(
                 } else {
                     frozenTicks = 0
                 }
+                lastPlayPos = cur
             }
 
             delay(500)
@@ -4857,14 +4874,14 @@ private fun PlayerSettingsDialog(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                "চ্যানেল সংযোগ ব্যর্থ হলে পরবর্তী চ্যানেলে যাওয়া",
+                                "চ্যানেল প্লে না হলে পরবর্তী চ্যানেলে যাওয়া",
                                 color = Color.White,
                                 fontSize = 12.5.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                "চ্যানেল লিঙ্ক সম্পূর্ণ অচল থাকলে পরবর্তী চ্যানেলে যাবে (চলমান ভিডিও কখনোই নিজে থেকে চ্যানেল বদলাবে না)।",
+                                "কোন চ্যানেল প্লে না হলে বা আটকে থাকলে অনুমতি ছাড়াই জোরপূর্বক পরবর্তী চ্যানেলে চলে যাবে।",
                                 color = Color(0xFF94A3B8),
                                 fontSize = 10.5.sp
                             )
