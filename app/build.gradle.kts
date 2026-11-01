@@ -59,7 +59,7 @@ android {
     applicationId = "com.aistudio.nafitv.yxosih"
     minSdk = 24
     targetSdk = 36
-    versionCode = 26
+    versionCode = 28
     versionName = "3.1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -88,9 +88,8 @@ android {
   buildTypes {
     release {
       isCrunchPngs = true
-      isMinifyEnabled = true
+      isMinifyEnabled = false
       isShrinkResources = false
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
