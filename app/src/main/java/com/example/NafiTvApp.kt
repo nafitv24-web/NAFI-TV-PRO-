@@ -104,11 +104,11 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                     .maxSizeBytes(diskCacheMaxBytes)
                     .build()
             }
-            .bitmapConfig(Bitmap.Config.RGB_565) // 50% memory saving on channel logos & posters
-            .allowHardware(!isLowRam) // GPU hardware bitmaps enabled for buttery 60/120fps scrolling on modern devices
-            .allowRgb565(true)
-            .crossfade(false) // Saves GPU compositing passes on low-RAM devices
-            .precision(Precision.INEXACT) // Automatically downsamples posters and logos to target UI size
+            .bitmapConfig(Bitmap.Config.ARGB_8888)
+            .allowHardware(false) // Prevents IllegalArgumentException: Software rendering doesn't support hardware bitmaps
+            .allowRgb565(false)
+            .crossfade(true)
+            .precision(Precision.INEXACT)
             .networkObserverEnabled(true)
             .respectCacheHeaders(false)
             .memoryCachePolicy(CachePolicy.ENABLED)

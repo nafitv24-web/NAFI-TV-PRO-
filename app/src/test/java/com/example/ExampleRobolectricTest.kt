@@ -29,4 +29,11 @@ class ExampleRobolectricTest {
       println("DEBUG_TEST: First match = ${matches[0].title}, url = ${matches[0].streamUrl}")
     }
   }
+
+  @Test
+  fun `test activity launch`() {
+    val controller = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
+    val activity = controller.get()
+    org.junit.Assert.assertNotNull(activity)
+  }
 }

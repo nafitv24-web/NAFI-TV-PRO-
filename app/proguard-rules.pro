@@ -37,11 +37,9 @@
     volatile <fields>;
 }
 
-# Media3, ExoPlayer, and Jellyfin FFmpeg decoder
+# Media3 and ExoPlayer
 -keep class androidx.media3.** { *; }
 -keepclassmembers class androidx.media3.** { *; }
--keep class org.jellyfin.media3.** { *; }
--keepclassmembers class org.jellyfin.media3.** { *; }
 
 # OkHttp, Okio, and Coil
 -keep class okhttp3.** { *; }
