@@ -22,13 +22,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        try {
-            enableEdgeToEdge()
-        } catch (_: Throwable) {}
+        enableEdgeToEdge()
 
-        try {
-            extractDeepLink(intent)
-        } catch (_: Throwable) {}
+        extractDeepLink(intent)
 
         setContent {
             MyApplicationTheme {
