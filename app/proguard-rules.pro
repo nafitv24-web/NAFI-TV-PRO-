@@ -1,11 +1,7 @@
-# Deep size-reduction ProGuard / R8 configuration:
-# Fully shrinks and obfuscates external libraries (Firebase, AdMob, Media3, Play Services)
-# reducing APK size below 15 MB while keeping 100% stability.
+# ProGuard / R8 configuration for NAFI TV Pro
+# Safe, high-performance size reduction without breaking entry points or reflection
 
--repackageclasses ''
--allowaccessmodification
-
-# Suppress harmless warnings
+# Suppress harmless library warnings
 -dontwarn **
 -ignorewarnings
 
@@ -13,54 +9,54 @@
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Keep all application classes completely intact
+# Keep Android Components (Activity, Application, Service, Receiver, Provider)
+-keep public class * extends android.app.Activity
+-keep public class * extends android.app.Application
+-keep public class * extends android.app.Service
+-keep public class * extends android.content.BroadcastReceiver
+-keep public class * extends android.content.ContentProvider
+
+# Keep application entry points and core classes
+-keep public class com.example.NafiTvApp { *; }
+-keep public class com.example.MainActivity { *; }
 -keep class com.example.** { *; }
 -keepclassmembers class com.example.** { *; }
 
-# Keep AndroidX, Activity, Core, and Jetpack Compose
--keep class androidx.compose.** { *; }
--keepclassmembers class androidx.compose.** { *; }
--keep class androidx.lifecycle.** { *; }
--keepclassmembers class androidx.lifecycle.** { *; }
--keep class androidx.activity.** { *; }
--keep class androidx.core.** { *; }
--keep class androidx.navigation.** { *; }
-
-# Keep Kotlin & Coroutines
--keep class kotlin.** { *; }
--keep class kotlin.reflect.** { *; }
--keep class kotlinx.coroutines.** { *; }
--keepclassmembers class kotlinx.coroutines.** { *; }
--keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
--keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
--keepclassmembernames class kotlinx.coroutines.** {
-    volatile <fields>;
+# Keep data classes and JSON models
+-keepclassmembers class com.example.model.** {
+    <fields>;
+    <init>(...);
 }
 
-# Media3 and ExoPlayer
+# Keep AndroidX & Jetpack Compose runtime
+-keep class androidx.compose.runtime.** { *; }
+-keep class androidx.compose.ui.** { *; }
+-keep class androidx.lifecycle.** { *; }
+-keep class androidx.activity.** { *; }
+-keep class androidx.navigation.** { *; }
+
+# Keep Coroutines
+-keep class kotlinx.coroutines.** { *; }
+-keepclassmembers class kotlinx.coroutines.** { *; }
+
+# Keep Media3 / ExoPlayer
 -keep class androidx.media3.** { *; }
 -keepclassmembers class androidx.media3.** { *; }
 
-# OkHttp, Okio, and Coil
+# Keep OkHttp & Coil
 -keep class okhttp3.** { *; }
--keepclassmembers class okhttp3.** { *; }
--keep class okio.** { *; }
 -keep class coil.** { *; }
--keepclassmembers class coil.** { *; }
 
-# Google Play Services Ads / AdMob
+# Keep Google Play Services Ads / AdMob Lite
 -keep class com.google.android.gms.ads.** { *; }
 -keepclassmembers class com.google.android.gms.ads.** { *; }
--keep class com.google.ads.** { *; }
--keepclassmembers class com.google.ads.** { *; }
 
-# Firebase & Google Credentials
+# Keep Firebase & Google Auth
 -keepattributes *JavascriptInterface*
 -keep class com.google.firebase.** { *; }
 -keepclassmembers class com.google.firebase.** { *; }
--keep class com.google.android.libraries.identity.googleid.** { *; }
 -keep class androidx.credentials.** { *; }
+-keep class com.google.android.libraries.identity.googleid.** { *; }
 
-# CloudStream plugin classes
+# Keep CloudStream plugin interfaces
 -keep class com.lagradost.cloudstream3.** { *; }
--keepclassmembers class com.lagradost.cloudstream3.** { *; }
