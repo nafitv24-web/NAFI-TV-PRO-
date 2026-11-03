@@ -1107,69 +1107,7 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Custom AudioSink with Float Output disabled and AudioCapabilities to prevent silent audio on MP2/AC3/EAC3/DTS streams
-        val audioSink = androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
-            .setEnableFloatOutput(false)
-            .setEnableAudioTrackPlaybackParams(true)
-            .setAudioCapabilities(androidx.media3.exoplayer.audio.AudioCapabilities.getCapabilities(context))
-            .build()
-
-        val renderersFactory = object : androidx.media3.exoplayer.DefaultRenderersFactory(context) {
-            override fun buildAudioSink(
-                context: android.content.Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean
-            ): androidx.media3.exoplayer.audio.AudioSink {
-                return audioSink
-            }
-
-            override fun buildAudioRenderers(
-                context: android.content.Context,
-                extensionRendererMode: Int,
-                mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
-                enableDecoderFallback: Boolean,
-                audioSink: androidx.media3.exoplayer.audio.AudioSink,
-                eventHandler: android.os.Handler,
-                eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                // Hardware/Platform MediaCodec Audio Renderer with decoder fallback
-                out.add(
-                    androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
-                        context,
-                        mediaCodecSelector,
-                        true,
-                        eventHandler,
-                        eventListener,
-                        audioSink
-                    )
-                )
-            }
-
-            override fun buildVideoRenderers(
-                context: android.content.Context,
-                extensionRendererMode: Int,
-                mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
-                enableDecoderFallback: Boolean,
-                eventHandler: android.os.Handler,
-                eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
-                allowedVideoJoiningTimeMs: Long,
-                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
-            ) {
-                // Delegate to super to ensure DefaultMediaCodecAdapterFactory (asynchronous MediaCodec)
-                // is properly configured and decoder fallback is enabled with 15s joining time
-                super.buildVideoRenderers(
-                    context,
-                    extensionRendererMode,
-                    mediaCodecSelector,
-                    true, // enableDecoderFallback
-                    eventHandler,
-                    eventListener,
-                    15000L.coerceAtLeast(allowedVideoJoiningTimeMs),
-                    out
-                )
-            }
-        }.apply {
+        val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context).apply {
             setEnableDecoderFallback(true)
             setEnableAudioFloatOutput(false)
             setEnableAudioTrackPlaybackParams(true)
@@ -1234,16 +1172,23 @@ fun VideoPlayerScreen(
             .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
             .build()
 
-        ExoPlayer.Builder(context, renderersFactory)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setTrackSelector(trackSelector)
-            .setLoadControl(loadControl)
-            .setBandwidthMeter(bandwidthMeter)
-            .setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
-            .setAudioAttributes(audioAttributes, true)
-            .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(androidx.media3.common.C.WAKE_MODE_LOCAL)
-            .build().apply {
+        val builtPlayer = try {
+            ExoPlayer.Builder(context, renderersFactory)
+                .setMediaSourceFactory(mediaSourceFactory)
+                .setTrackSelector(trackSelector)
+                .setLoadControl(loadControl)
+                .setBandwidthMeter(bandwidthMeter)
+                .setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
+                .setAudioAttributes(audioAttributes, true)
+                .setHandleAudioBecomingNoisy(true)
+                .setWakeMode(androidx.media3.common.C.WAKE_MODE_LOCAL)
+                .build()
+        } catch (e: Throwable) {
+            android.util.Log.e("VideoPlayerScreen", "Failed to build optimized ExoPlayer, using default", e)
+            ExoPlayer.Builder(context).build()
+        }
+
+        builtPlayer.apply {
                 volume = if (isMuted) 0f else 1.0f
                 val finalMediaUri = when {
                     finalCleanUrl.startsWith("file://") -> android.net.Uri.parse(finalCleanUrl)
@@ -2273,29 +2218,36 @@ fun VideoPlayerScreen(
             } else {
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false
-                            this.resizeMode = resizeMode
-                            setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                            setKeepContentOnPlayerReset(true)
-                            keepScreenOn = true
-                            try {
-                                setEnableComposeSurfaceSyncWorkaround(true)
-                            } catch (_: Throwable) {}
-                            try {
-                                (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                            } catch (_: Throwable) {}
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
+                        try {
+                            PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = false
+                                this.resizeMode = resizeMode
+                                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                                setKeepContentOnPlayerReset(true)
+                                keepScreenOn = true
+                                try {
+                                    setEnableComposeSurfaceSyncWorkaround(true)
+                                } catch (_: Throwable) {}
+                                try {
+                                    (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
+                                } catch (_: Throwable) {}
+                                layoutParams = FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            }
+                        } catch (e: Throwable) {
+                            android.util.Log.e("VideoPlayerScreen", "Error instantiating PlayerView", e)
+                            android.view.View(ctx)
                         }
                     },
                     update = { playerView ->
-                        playerView.player = exoPlayer
-                        playerView.resizeMode = resizeMode
+                        if (playerView is PlayerView) {
+                            playerView.player = exoPlayer
+                            playerView.resizeMode = resizeMode
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2392,29 +2344,36 @@ fun VideoPlayerScreen(
             } else {
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false
-                            this.resizeMode = resizeMode
-                            setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                            setKeepContentOnPlayerReset(true)
-                            keepScreenOn = true
-                            try {
-                                setEnableComposeSurfaceSyncWorkaround(true)
-                            } catch (_: Throwable) {}
-                            try {
-                                (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                            } catch (_: Throwable) {}
-                            layoutParams = FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                            )
+                        try {
+                            PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = false
+                                this.resizeMode = resizeMode
+                                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                                setKeepContentOnPlayerReset(true)
+                                keepScreenOn = true
+                                try {
+                                    setEnableComposeSurfaceSyncWorkaround(true)
+                                } catch (_: Throwable) {}
+                                try {
+                                    (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
+                                } catch (_: Throwable) {}
+                                layoutParams = FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            }
+                        } catch (e: Throwable) {
+                            android.util.Log.e("VideoPlayerScreen", "Error instantiating PlayerView in fullscreen", e)
+                            android.view.View(ctx)
                         }
                     },
                     update = { playerView ->
-                        playerView.player = exoPlayer
-                        playerView.resizeMode = resizeMode
+                        if (playerView is PlayerView) {
+                            playerView.player = exoPlayer
+                            playerView.resizeMode = resizeMode
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2777,29 +2736,36 @@ fun VideoPlayerScreen(
                 } else {
                     AndroidView(
                         factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                player = exoPlayer
-                                useController = false
-                                this.resizeMode = resizeMode
-                                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                                setKeepContentOnPlayerReset(true)
-                                keepScreenOn = true
-                                try {
-                                    setEnableComposeSurfaceSyncWorkaround(true)
-                                } catch (_: Throwable) {}
-                                try {
-                                    (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                                } catch (_: Throwable) {}
-                                layoutParams = FrameLayout.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT
-                                )
+                            try {
+                                PlayerView(ctx).apply {
+                                    player = exoPlayer
+                                    useController = false
+                                    this.resizeMode = resizeMode
+                                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                                    setKeepContentOnPlayerReset(true)
+                                    keepScreenOn = true
+                                    try {
+                                        setEnableComposeSurfaceSyncWorkaround(true)
+                                    } catch (_: Throwable) {}
+                                    try {
+                                        (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
+                                    } catch (_: Throwable) {}
+                                    layoutParams = FrameLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                }
+                            } catch (e: Throwable) {
+                                android.util.Log.e("VideoPlayerScreen", "Error instantiating PlayerView in regular view", e)
+                                android.view.View(ctx)
                             }
                         },
                         update = { playerView ->
-                            playerView.player = exoPlayer
-                            playerView.resizeMode = resizeMode
+                            if (playerView is PlayerView) {
+                                playerView.player = exoPlayer
+                                playerView.resizeMode = resizeMode
+                            }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
