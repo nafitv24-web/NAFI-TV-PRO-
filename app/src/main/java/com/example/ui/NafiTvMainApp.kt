@@ -717,14 +717,17 @@ fun NafiTvMainApp(
                 else -> allLiveChannels
             }
         }
-        VideoPlayerScreen(
-            mediaItem = selectedMediaItem!!,
-            playlist = currentPlayList,
-            isTvMode = isTvMode,
-            marqueeTickerText = breakingNewsText,
-            onSelectMedia = { selectedMediaItem = it },
-            onBack = { selectedMediaItem = null }
-        )
+        val safeMedia = selectedMediaItem
+        if (safeMedia != null) {
+            VideoPlayerScreen(
+                mediaItem = safeMedia,
+                playlist = currentPlayList,
+                isTvMode = isTvMode,
+                marqueeTickerText = breakingNewsText,
+                onSelectMedia = { selectedMediaItem = it },
+                onBack = { selectedMediaItem = null }
+            )
+        }
     } else if (activeMovieBrowserProvider != null) {
         // IN-APP MOVIE & CLOUDSTREAM WEBSITE BROWSER WITH AD-SHIELD & STREAM DETECTOR
         MovieBrowserScreen(

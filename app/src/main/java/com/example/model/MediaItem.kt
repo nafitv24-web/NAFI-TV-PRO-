@@ -189,58 +189,66 @@ data class MediaItem(
     // Helper to get all available server URLs
     fun getAllServers(): List<StreamServer> {
         val list = mutableListOf<StreamServer>()
-        if (servers.isNotEmpty()) {
-            list.addAll(servers.filter { it.url.isNotBlank() })
-        }
-        if (streamUrl.isNotBlank() && list.none { it.url.trim().equals(streamUrl.trim(), ignoreCase = true) }) {
-            list.add(0, StreamServer("সার্ভার ১", streamUrl.trim()))
-        }
-        if (!backupUrl.isNullOrBlank() && 
-            !backupUrl.trim().equals(streamUrl.trim(), ignoreCase = true) && 
-            list.none { it.url.trim().equals(backupUrl.trim(), ignoreCase = true) }
-        ) {
-            list.add(StreamServer("সার্ভার ২", backupUrl.trim()))
-        }
-
-        // Automatic mirror endpoints for Pixeldrain URLs
-        val lower = streamUrl.lowercase()
-        if (lower.contains("pixeldrain") || lower.contains("pixeldra.in")) {
-            val fileId = streamUrl.substringAfter("/api/file/").substringAfter("/u/").substringBefore("?").substringBefore("/")
-            if (fileId.isNotBlank()) {
-                val s1 = "https://pixeldrain.dev/api/file/$fileId?download"
-                val s2 = "https://pixeldrain.com/api/file/$fileId?download"
-                val s3 = "https://pixeldrain.com/api/file/$fileId"
-                if (list.none { it.url.equals(s1, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Dev", s1))
-                if (list.none { it.url.equals(s2, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Com", s2))
-                if (list.none { it.url.equals(s3, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Direct", s3))
+        try {
+            if (!servers.isNullOrEmpty()) {
+                list.addAll(servers.filter { !it.url.isNullOrBlank() })
             }
-        }
-
-        val distinctList = list.distinctBy { it.url.trim() }
-        if (distinctList.isEmpty()) {
-            return if (streamUrl.isNotBlank()) listOf(StreamServer("সার্ভার ১", streamUrl.trim())) else emptyList()
-        }
-        return distinctList.mapIndexed { index, server ->
-            val num = index + 1
-            val rawName = server.name.trim()
-            val cleanName = if (rawName.isBlank() || rawName.equals(title.trim(), ignoreCase = true)) {
-                "সার্ভার $num"
-            } else {
-                rawName
+            val safeStreamUrl = streamUrl?.trim().orEmpty()
+            if (safeStreamUrl.isNotBlank() && list.none { it.url?.trim().equals(safeStreamUrl, ignoreCase = true) }) {
+                list.add(0, StreamServer("সার্ভার ১", safeStreamUrl))
             }
-            server.copy(
-                name = cleanName,
-                url = server.url.trim(),
-                drmScheme = server.drmScheme ?: drmScheme,
-                drmLicenseUrl = server.drmLicenseUrl ?: drmLicenseUrl,
-                drmLicenseKey = server.drmLicenseKey ?: drmLicenseKey,
-                userAgent = server.userAgent ?: userAgent,
-                referrer = server.referrer ?: referrer,
-                cookie = server.cookie ?: cookie,
-                origin = server.origin ?: origin,
-                customHeaders = server.customHeaders ?: customHeaders,
-                manifestType = server.manifestType ?: manifestType
-            )
+            val safeBackupUrl = backupUrl?.trim().orEmpty()
+            if (safeBackupUrl.isNotBlank() && 
+                !safeBackupUrl.equals(safeStreamUrl, ignoreCase = true) && 
+                list.none { it.url?.trim().equals(safeBackupUrl, ignoreCase = true) }
+            ) {
+                list.add(StreamServer("সার্ভার ২", safeBackupUrl))
+            }
+
+            // Automatic mirror endpoints for Pixeldrain URLs
+            val lower = safeStreamUrl.lowercase()
+            if (lower.contains("pixeldrain") || lower.contains("pixeldra.in")) {
+                val fileId = safeStreamUrl.substringAfter("/api/file/").substringAfter("/u/").substringBefore("?").substringBefore("/")
+                if (fileId.isNotBlank()) {
+                    val s1 = "https://pixeldrain.dev/api/file/$fileId?download"
+                    val s2 = "https://pixeldrain.com/api/file/$fileId?download"
+                    val s3 = "https://pixeldrain.com/api/file/$fileId"
+                    if (list.none { it.url.equals(s1, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Dev", s1))
+                    if (list.none { it.url.equals(s2, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Com", s2))
+                    if (list.none { it.url.equals(s3, ignoreCase = true) }) list.add(StreamServer("Pixeldrain Direct", s3))
+                }
+            }
+
+            val distinctList = list.distinctBy { it.url?.trim().orEmpty() }.filter { !it.url.isNullOrBlank() }
+            if (distinctList.isEmpty()) {
+                return if (safeStreamUrl.isNotBlank()) listOf(StreamServer("সার্ভার ১", safeStreamUrl)) else emptyList()
+            }
+            return distinctList.mapIndexed { index, server ->
+                val num = index + 1
+                val rawName = server.name?.trim().orEmpty()
+                val safeTitle = title?.trim().orEmpty()
+                val cleanName = if (rawName.isBlank() || rawName.equals(safeTitle, ignoreCase = true)) {
+                    "সার্ভার $num"
+                } else {
+                    rawName
+                }
+                server.copy(
+                    name = cleanName,
+                    url = server.url?.trim().orEmpty(),
+                    drmScheme = server.drmScheme ?: drmScheme,
+                    drmLicenseUrl = server.drmLicenseUrl ?: drmLicenseUrl,
+                    drmLicenseKey = server.drmLicenseKey ?: drmLicenseKey,
+                    userAgent = server.userAgent ?: userAgent,
+                    referrer = server.referrer ?: referrer,
+                    cookie = server.cookie ?: cookie,
+                    origin = server.origin ?: origin,
+                    customHeaders = server.customHeaders ?: customHeaders,
+                    manifestType = server.manifestType ?: manifestType
+                )
+            }
+        } catch (_: Throwable) {
+            val fallbackUrl = streamUrl?.trim().orEmpty()
+            return if (fallbackUrl.isNotBlank()) listOf(StreamServer("সার্ভার ১", fallbackUrl)) else emptyList()
         }
     }
 }

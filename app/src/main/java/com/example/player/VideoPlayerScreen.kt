@@ -146,37 +146,48 @@ fun VideoPlayerScreen(
     }
 
     var currentMedia by remember(mediaItem) { mutableStateOf(mediaItem) }
-    val servers = remember(currentMedia) { currentMedia.getAllServers() }
-    val initialServerIdx = remember(currentMedia) {
-        val target = currentMedia.streamUrl.trim()
-        if (target.isBlank()) 0
-        else {
-            val found = servers.indexOfFirst {
-                it.url.trim().equals(target, ignoreCase = true) ||
-                (it.url.contains('?') && it.url.substringBefore('?').equals(target.substringBefore('?'), ignoreCase = true)) ||
-                (it.url.contains('|') && it.url.substringBefore('|').equals(target.substringBefore('|'), ignoreCase = true))
+    val servers = remember(currentMedia) { 
+        try { currentMedia.getAllServers() } catch (_: Throwable) { emptyList() }
+    }
+    val initialServerIdx = remember(currentMedia, servers) {
+        try {
+            val target = currentMedia.streamUrl?.trim().orEmpty()
+            if (target.isBlank()) 0
+            else {
+                val found = servers.indexOfFirst {
+                    val u = it.url?.trim().orEmpty()
+                    u.equals(target, ignoreCase = true) ||
+                    (u.contains('?') && u.substringBefore('?').equals(target.substringBefore('?'), ignoreCase = true)) ||
+                    (u.contains('|') && u.substringBefore('|').equals(target.substringBefore('|'), ignoreCase = true))
+                }
+                if (found >= 0) found else 0
             }
-            if (found >= 0) found else 0
-        }
+        } catch (_: Throwable) { 0 }
     }
     var selectedServerIndex by remember(currentMedia) { mutableIntStateOf(initialServerIdx) }
     var currentUrl by remember(currentMedia) {
-        val target = if (currentMedia.streamUrl.isNotBlank()) {
-            currentMedia.streamUrl
-        } else {
-            servers.getOrNull(selectedServerIndex)?.url.orEmpty()
+        try {
+            val target = if (currentMedia.streamUrl?.isNotBlank() == true) {
+                currentMedia.streamUrl?.trim().orEmpty()
+            } else {
+                servers.getOrNull(selectedServerIndex)?.url?.trim().orEmpty()
+            }
+            mutableStateOf(target)
+        } catch (_: Throwable) {
+            mutableStateOf("")
         }
-        mutableStateOf(target)
     }
 
     // Keep internal player state synced with parent mediaItem updates without recreating screen
     LaunchedEffect(mediaItem.id, mediaItem.streamUrl) {
-        if (currentMedia.id != mediaItem.id || currentMedia.streamUrl != mediaItem.streamUrl) {
-            currentMedia = mediaItem
-            selectedServerIndex = 0
-            val targetServers = mediaItem.getAllServers()
-            currentUrl = targetServers.firstOrNull()?.url ?: mediaItem.streamUrl
-        }
+        try {
+            if (currentMedia.id != mediaItem.id || currentMedia.streamUrl != mediaItem.streamUrl) {
+                currentMedia = mediaItem
+                selectedServerIndex = 0
+                val targetServers = mediaItem.getAllServers()
+                currentUrl = targetServers.firstOrNull()?.url ?: mediaItem.streamUrl.orEmpty()
+            }
+        } catch (_: Throwable) {}
     }
 
     // Configure lenient SSL globally for live IPTV / HLS streams (matching VLC and Televizo behavior)
@@ -199,22 +210,24 @@ fun VideoPlayerScreen(
         }
     }
 
-    val isTvOrLiveChannel = currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT
+    val isTvOrLiveChannel = try { currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT } catch (_: Throwable) { false }
     val isWebEmbedUrl = remember(currentUrl) {
-        !isTvOrLiveChannel && StreamExtractor.isEmbedUrl(currentUrl)
+        try { !isTvOrLiveChannel && StreamExtractor.isEmbedUrl(currentUrl) } catch (_: Throwable) { false }
     }
     var forceWebEngine by remember(currentMedia.id, currentUrl) { mutableStateOf(false) }
     val useWebPlayer = (!isTvOrLiveChannel && (isWebEmbedUrl || forceWebEngine))
 
     // Automatically resolve any 2embed/vidsrc/embed streams to native ExoPlayer URLs in the background
     LaunchedEffect(currentUrl) {
-        if (StreamExtractor.isEmbedUrl(currentUrl)) {
-            val directStream = StreamExtractor.extractDirectStream(currentUrl)
-            if (directStream != null && directStream.streamUrl.isNotBlank()) {
-                currentUrl = directStream.streamUrl
-                forceWebEngine = false
+        try {
+            if (StreamExtractor.isEmbedUrl(currentUrl)) {
+                val directStream = StreamExtractor.extractDirectStream(currentUrl)
+                if (directStream != null && directStream.streamUrl.isNotBlank()) {
+                    currentUrl = directStream.streamUrl
+                    forceWebEngine = false
+                }
             }
-        }
+        } catch (_: Throwable) {}
     }
 
     // Automatically resolve raw Stalker / Ministra live.php URLs (e.g. line.tivi-one.net) to authorized play_tokens
@@ -372,39 +385,44 @@ fun VideoPlayerScreen(
 
     // Keep server index, currentUrl, and media in sync whenever user picks a specific server or media item
     LaunchedEffect(mediaItem) {
-        currentMedia = mediaItem
-        val currentServers = mediaItem.getAllServers()
-        val target = mediaItem.streamUrl.trim()
-        val foundIdx = if (target.isNotBlank()) {
-            val idx = currentServers.indexOfFirst {
-                it.url.trim().equals(target, ignoreCase = true) ||
-                (it.url.contains('?') && it.url.substringBefore('?').equals(target.substringBefore('?'), ignoreCase = true)) ||
-                (it.url.contains('|') && it.url.substringBefore('|').equals(target.substringBefore('|'), ignoreCase = true))
-            }
-            if (idx >= 0) idx else 0
-        } else 0
-        selectedServerIndex = foundIdx
-        currentUrl = if (target.isNotBlank()) target else currentServers.getOrNull(foundIdx)?.url.orEmpty()
-        playerRetryKey = 0
-        errorMessage = null
+        try {
+            currentMedia = mediaItem
+            val currentServers = mediaItem.getAllServers()
+            val target = mediaItem.streamUrl?.trim().orEmpty()
+            val foundIdx = if (target.isNotBlank()) {
+                val idx = currentServers.indexOfFirst {
+                    val u = it.url?.trim().orEmpty()
+                    u.equals(target, ignoreCase = true) ||
+                    (u.contains('?') && u.substringBefore('?').equals(target.substringBefore('?'), ignoreCase = true)) ||
+                    (u.contains('|') && u.substringBefore('|').equals(target.substringBefore('|'), ignoreCase = true))
+                }
+                if (idx >= 0) idx else 0
+            } else 0
+            selectedServerIndex = foundIdx
+            currentUrl = if (target.isNotBlank()) target else currentServers.getOrNull(foundIdx)?.url?.trim().orEmpty()
+            playerRetryKey = 0
+            errorMessage = null
+        } catch (_: Throwable) {}
     }
 
     // Keep effective headers synchronized for external player hand-off
     LaunchedEffect(currentUrl, currentMedia.id) {
-        val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
-            rawUrl = currentUrl,
-            itemScheme = currentMedia.drmScheme,
-            itemLicenseUrl = currentMedia.drmLicenseUrl,
-            itemLicenseKey = currentMedia.drmLicenseKey,
-            itemHeaders = currentMedia.drmHeaders,
-            itemManifestType = currentMedia.manifestType
-        )
-        val headers = mutableMapOf<String, String>()
-        streamInfo.headers.forEach { (k, v) -> headers[k] = v }
-        currentMedia.customHeaders?.let { headers.putAll(it) }
-        currentMedia.userAgent?.takeIf { it.isNotBlank() }?.let { headers["User-Agent"] = it }
-        currentMedia.referrer?.takeIf { it.isNotBlank() }?.let { headers["Referer"] = it }
-        currentEffectiveHeaders = headers
+        try {
+            val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
+                rawUrl = currentUrl,
+                itemScheme = currentMedia.drmScheme,
+                itemLicenseUrl = currentMedia.drmLicenseUrl,
+                itemLicenseKey = currentMedia.drmLicenseKey,
+                itemHeaders = currentMedia.drmHeaders,
+                itemManifestType = currentMedia.manifestType
+            )
+            val headers = mutableMapOf<String, String>()
+            streamInfo.headers.forEach { (k, v) -> headers[k] = v }
+            currentMedia.customHeaders?.let { headers.putAll(it) }
+            currentMedia.userAgent?.takeIf { it.isNotBlank() }?.let { headers["User-Agent"] = it }
+            currentMedia.referrer?.takeIf { it.isNotBlank() }?.let { headers["Referer"] = it }
+            currentEffectiveHeaders = headers
+        } catch (_: Throwable) {}
     }
 
     // Automatic season & episode metadata fetcher for Series
@@ -787,7 +805,8 @@ fun VideoPlayerScreen(
 
     // Setup ExoPlayer instance with custom http data source, headers and dynamic pipe parsing
     val exoPlayer = remember(currentUrl, currentMedia, playerRetryKey) {
-        val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
+        try {
+            val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
             rawUrl = currentUrl,
             itemScheme = currentMedia.drmScheme,
             itemLicenseUrl = currentMedia.drmLicenseUrl,
@@ -1590,6 +1609,17 @@ fun VideoPlayerScreen(
                     }
                 })
             }
+        } catch (t: Throwable) {
+            android.util.Log.e("VideoPlayerScreen", "Fatal error creating ExoPlayer", t)
+            errorMessage = "ভিডিও প্লেয়ার প্রস্তুত করা যাচ্ছে না। অনুগ্রহ করে বিকল্প সার্ভার চেষ্টা করুন।"
+            try {
+                ExoPlayer.Builder(context).build().apply {
+                    playWhenReady = false
+                }
+            } catch (_: Throwable) {
+                ExoPlayer.Builder(context.applicationContext).build()
+            }
+        }
     }
 
     // Dead / Unplayable Channel Watchdog on initial load:
@@ -2254,12 +2284,6 @@ fun VideoPlayerScreen(
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                                 setKeepContentOnPlayerReset(true)
                                 keepScreenOn = true
-                                try {
-                                    setEnableComposeSurfaceSyncWorkaround(true)
-                                } catch (_: Throwable) {}
-                                try {
-                                    (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                                } catch (_: Throwable) {}
                                 layoutParams = FrameLayout.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -2382,12 +2406,6 @@ fun VideoPlayerScreen(
                                 setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                                 setKeepContentOnPlayerReset(true)
                                 keepScreenOn = true
-                                try {
-                                    setEnableComposeSurfaceSyncWorkaround(true)
-                                } catch (_: Throwable) {}
-                                try {
-                                    (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                                } catch (_: Throwable) {}
                                 layoutParams = FrameLayout.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -2776,12 +2794,6 @@ fun VideoPlayerScreen(
                                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                                     setKeepContentOnPlayerReset(true)
                                     keepScreenOn = true
-                                    try {
-                                        setEnableComposeSurfaceSyncWorkaround(true)
-                                    } catch (_: Throwable) {}
-                                    try {
-                                        (videoSurfaceView as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
-                                    } catch (_: Throwable) {}
                                     layoutParams = FrameLayout.LayoutParams(
                                         ViewGroup.LayoutParams.MATCH_PARENT,
                                         ViewGroup.LayoutParams.MATCH_PARENT

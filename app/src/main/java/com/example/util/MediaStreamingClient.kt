@@ -179,21 +179,38 @@ object MediaStreamingClient {
     }
 
     val streamingOkHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .dns(smartDns)
-            .connectTimeout(8, TimeUnit.SECONDS) // Fast fail-fast connection setup
-            .readTimeout(20, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(0, TimeUnit.MILLISECONDS) // 0 = infinite duration for continuous live broadcasts
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .retryOnConnectionFailure(true)
-            .addInterceptor(streamHealingInterceptor)
-            .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
-            .connectionPool(ConnectionPool(64, 10, TimeUnit.MINUTES))
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            .build()
+        try {
+            OkHttpClient.Builder()
+                .dns(smartDns)
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .callTimeout(0, TimeUnit.MILLISECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .addInterceptor(streamHealingInterceptor)
+                .apply {
+                    try {
+                        sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
+                        hostnameVerifier { _, _ -> true }
+                    } catch (_: Throwable) {}
+                }
+                .connectionPool(ConnectionPool(64, 10, TimeUnit.MINUTES))
+                .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+                .build()
+        } catch (_: Throwable) {
+            try {
+                OkHttpClient.Builder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(20, TimeUnit.SECONDS)
+                    .followRedirects(true)
+                    .retryOnConnectionFailure(true)
+                    .build()
+            } catch (_: Throwable) {
+                OkHttpClient()
+            }
+        }
     }
 
     /**
@@ -205,20 +222,32 @@ object MediaStreamingClient {
         userAgent: String,
         headers: Map<String, String>,
         bandwidthMeter: TransferListener? = null
-    ): Pair<OkHttpDataSource.Factory, DataSource.Factory> {
-        val okHttpDataSourceFactory = OkHttpDataSource.Factory(streamingOkHttpClient)
-            .setUserAgent(userAgent)
-            .setDefaultRequestProperties(headers)
+    ): Pair<DataSource.Factory, DataSource.Factory> {
+        return try {
+            val okHttpDataSourceFactory = OkHttpDataSource.Factory(streamingOkHttpClient)
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(headers)
 
-        if (bandwidthMeter != null) {
-            okHttpDataSourceFactory.setTransferListener(bandwidthMeter)
+            if (bandwidthMeter != null) {
+                okHttpDataSourceFactory.setTransferListener(bandwidthMeter)
+            }
+
+            val defaultDataSourceFactory = DefaultDataSource.Factory(
+                context,
+                okHttpDataSourceFactory
+            )
+
+            Pair(okHttpDataSourceFactory, defaultDataSourceFactory)
+        } catch (e: Throwable) {
+            android.util.Log.e("MediaStreamingClient", "Error building OkHttpDataSource.Factory, using standard DefaultHttpDataSource", e)
+            val stdHttpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                .setUserAgent(userAgent)
+                .setDefaultRequestProperties(headers)
+            if (bandwidthMeter != null) {
+                stdHttpFactory.setTransferListener(bandwidthMeter)
+            }
+            val defaultFactory = DefaultDataSource.Factory(context, stdHttpFactory)
+            Pair(stdHttpFactory, defaultFactory)
         }
-
-        val defaultDataSourceFactory = DefaultDataSource.Factory(
-            context,
-            okHttpDataSourceFactory
-        )
-
-        return Pair(okHttpDataSourceFactory, defaultDataSourceFactory)
     }
 }
