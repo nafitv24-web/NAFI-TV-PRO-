@@ -299,16 +299,20 @@ fun VideoPlayerScreen(
     var playerRetryKey by remember(currentUrl) { mutableIntStateOf(0) }
 
     // MX Player Gestures: Volume & Brightness & Seeking State
-    val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
-    val maxAudioVolume = remember(audioManager) { audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15 }
+    val audioManager = remember(context) {
+        try { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager } catch (_: Throwable) { null }
+    }
+    val maxAudioVolume = remember(audioManager) {
+        try { audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15 } catch (_: Throwable) { 15 }
+    }
 
     var currentVolumeFraction by remember {
-        val initialVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 7
-        val maxVol = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15
+        val initialVol = try { audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 7 } catch (_: Throwable) { 7 }
+        val maxVol = try { audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15 } catch (_: Throwable) { 15 }
         mutableFloatStateOf((initialVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f))
     }
     var currentBrightnessFraction by remember {
-        val initialBright = activity?.window?.attributes?.screenBrightness ?: 0.5f
+        val initialBright = try { activity?.window?.attributes?.screenBrightness ?: 0.5f } catch (_: Throwable) { 0.5f }
         mutableFloatStateOf(if (initialBright < 0f) 0.5f else initialBright.coerceIn(0.01f, 1.0f))
     }
 
@@ -492,20 +496,27 @@ fun VideoPlayerScreen(
     }
 
     DisposableEffect(activity) {
-        if (activity is androidx.activity.ComponentActivity) {
-            val listener = Consumer<PictureInPictureModeChangedInfo> { info ->
-                isInPipMode = info.isInPictureInPictureMode
-                if (info.isInPictureInPictureMode) {
-                    showControls = false
-                    showQuickChannelDrawer = false
+        val act = activity
+        var pipListener: Consumer<PictureInPictureModeChangedInfo>? = null
+        try {
+            if (act is androidx.activity.ComponentActivity) {
+                val listener = Consumer<PictureInPictureModeChangedInfo> { info ->
+                    isInPipMode = info.isInPictureInPictureMode
+                    if (info.isInPictureInPictureMode) {
+                        showControls = false
+                        showQuickChannelDrawer = false
+                    }
                 }
+                pipListener = listener
+                act.addOnPictureInPictureModeChangedListener(listener)
             }
-            activity.addOnPictureInPictureModeChangedListener(listener)
-            onDispose {
-                activity.removeOnPictureInPictureModeChangedListener(listener)
-            }
-        } else {
-            onDispose {}
+        } catch (_: Throwable) {}
+        onDispose {
+            try {
+                if (act is androidx.activity.ComponentActivity && pipListener != null) {
+                    act.removeOnPictureInPictureModeChangedListener(pipListener)
+                }
+            } catch (_: Throwable) {}
         }
     }
 
@@ -592,13 +603,15 @@ fun VideoPlayerScreen(
     }
 
     fun toggleFullscreen() {
-        val targetLandscape = !isFullscreen
-        isFullscreen = targetLandscape
-        activity?.requestedOrientation = if (targetLandscape) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
+        try {
+            val targetLandscape = !isFullscreen
+            isFullscreen = targetLandscape
+            activity?.requestedOrientation = if (targetLandscape) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        } catch (_: Throwable) {}
     }
 
     // Intercept system/mobile back press to safely exit player and return to previous list
@@ -614,86 +627,85 @@ fun VideoPlayerScreen(
 
     // Synchronize fullscreen state with device orientation if physically rotated or in TV Mode
     LaunchedEffect(isScreenLandscape, isTvMode) {
-        if ((isScreenLandscape || isTvMode) && !isFullscreen) {
-            isFullscreen = true
-        }
-        if (isTvMode) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        }
+        try {
+            if ((isScreenLandscape || isTvMode) && !isFullscreen) {
+                isFullscreen = true
+            }
+            if (isTvMode) {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        } catch (_: Throwable) {}
     }
 
     // Reset orientation only when exiting the player screen entirely
     DisposableEffect(isTvMode) {
         onDispose {
-            if (isTvMode) {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            } else {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            }
+            try {
+                if (isTvMode) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                } else {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+            } catch (_: Throwable) {}
         }
     }
 
     // Hide System Bars (Status Bar & Navigation Bar) completely in fullscreen mode
     DisposableEffect(isFullscreen, activity) {
-        val window = activity?.window
-        if (window != null) {
-            WindowCompat.setDecorFitsSystemWindows(window, !isFullscreen)
-            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            if (isFullscreen) {
-                insetsController.hide(WindowInsetsCompat.Type.systemBars())
-                insetsController.hide(WindowInsetsCompat.Type.statusBars())
-                insetsController.hide(WindowInsetsCompat.Type.navigationBars())
-                insetsController.hide(WindowInsetsCompat.Type.captionBar())
-                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                window.addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                    window.attributes.layoutInDisplayCutoutMode =
-                        android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                }
-                @Suppress("DEPRECATION")
-                window.decorView.systemUiVisibility = (
-                    android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                )
-            } else {
-                insetsController.show(WindowInsetsCompat.Type.systemBars())
-                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                @Suppress("DEPRECATION")
-                window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
+        try {
+            val window = activity?.window
+            if (window != null) {
+                try {
+                    WindowCompat.setDecorFitsSystemWindows(window, !isFullscreen)
+                } catch (_: Throwable) {}
+                try {
+                    val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                    insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    if (isFullscreen) {
+                        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+                        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                            try {
+                                val lp = window.attributes
+                                lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                                window.attributes = lp
+                            } catch (_: Throwable) {}
+                        }
+                    } else {
+                        insetsController.show(WindowInsetsCompat.Type.systemBars())
+                        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                    }
+                } catch (_: Throwable) {}
             }
-        }
+        } catch (_: Throwable) {}
         onDispose {
-            val w = activity?.window
-            if (w != null) {
-                WindowCompat.setDecorFitsSystemWindows(w, true)
-                val insetsController = WindowCompat.getInsetsController(w, w.decorView)
-                insetsController.show(WindowInsetsCompat.Type.systemBars())
-                w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                @Suppress("DEPRECATION")
-                w.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_VISIBLE
-            }
+            try {
+                val w = activity?.window
+                if (w != null) {
+                    try {
+                        WindowCompat.setDecorFitsSystemWindows(w, true)
+                        val insetsController = WindowCompat.getInsetsController(w, w.decorView)
+                        insetsController.show(WindowInsetsCompat.Type.systemBars())
+                        w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                    } catch (_: Throwable) {}
+                }
+            } catch (_: Throwable) {}
         }
     }
 
     // Re-enforce system bar hiding when fullscreen or controls change
     LaunchedEffect(isFullscreen, showControls) {
-        if (isFullscreen) {
-            val window = activity?.window
-            if (window != null) {
-                WindowCompat.setDecorFitsSystemWindows(window, false)
-                val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-                insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                insetsController.hide(WindowInsetsCompat.Type.systemBars())
-                insetsController.hide(WindowInsetsCompat.Type.statusBars())
-                insetsController.hide(WindowInsetsCompat.Type.navigationBars())
-                insetsController.hide(WindowInsetsCompat.Type.captionBar())
+        try {
+            if (isFullscreen) {
+                val window = activity?.window
+                if (window != null) {
+                    WindowCompat.setDecorFitsSystemWindows(window, false)
+                    val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                    insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    insetsController.hide(WindowInsetsCompat.Type.systemBars())
+                }
             }
-        }
+        } catch (_: Throwable) {}
     }
 
     // Auto hide controls after 6 seconds of inactivity, reset on user remote interaction
@@ -1278,9 +1290,18 @@ fun VideoPlayerScreen(
                     mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_WEBM)
                 }
 
-                setMediaItem(mediaItemBuilder.build())
-                playWhenReady = true
-                prepare()
+                try {
+                    if (finalCleanUrl.isNotBlank()) {
+                        setMediaItem(mediaItemBuilder.build())
+                        playWhenReady = true
+                        prepare()
+                    } else {
+                        errorMessage = "স্ট্রিমিং লিঙ্ক খালি। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন।"
+                    }
+                } catch (e: Throwable) {
+                    android.util.Log.e("VideoPlayerScreen", "Error preparing media item", e)
+                    errorMessage = "ভিডিও লোড করা যাচ্ছে না। অনুগ্রহ করে বিকল্প সার্ভার চেষ্টা করুন।"
+                }
 
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1661,7 +1682,9 @@ fun VideoPlayerScreen(
     // Cleanup on dispose
     DisposableEffect(exoPlayer) {
         onDispose {
-            exoPlayer.release()
+            try {
+                exoPlayer.release()
+            } catch (_: Throwable) {}
         }
     }
 
@@ -1671,19 +1694,23 @@ fun VideoPlayerScreen(
     LaunchedEffect(Unit) {
         try {
             focusRequester.requestFocus()
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
     }
 
     LaunchedEffect(showControls) {
         try {
             if (showControls) {
                 delay(80)
-                initialControlFocusRequester.requestFocus()
+                try {
+                    initialControlFocusRequester.requestFocus()
+                } catch (_: Throwable) {}
             } else {
                 delay(50)
-                focusRequester.requestFocus()
+                try {
+                    focusRequester.requestFocus()
+                } catch (_: Throwable) {}
             }
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
     }
 
     // Switch stream server by index
@@ -2244,10 +2271,12 @@ fun VideoPlayerScreen(
                         }
                     },
                     update = { playerView ->
-                        if (playerView is PlayerView) {
-                            playerView.player = exoPlayer
-                            playerView.resizeMode = resizeMode
-                        }
+                        try {
+                            if (playerView is PlayerView) {
+                                playerView.player = exoPlayer
+                                playerView.resizeMode = resizeMode
+                            }
+                        } catch (_: Throwable) {}
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2370,10 +2399,12 @@ fun VideoPlayerScreen(
                         }
                     },
                     update = { playerView ->
-                        if (playerView is PlayerView) {
-                            playerView.player = exoPlayer
-                            playerView.resizeMode = resizeMode
-                        }
+                        try {
+                            if (playerView is PlayerView) {
+                                playerView.player = exoPlayer
+                                playerView.resizeMode = resizeMode
+                            }
+                        } catch (_: Throwable) {}
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2762,10 +2793,12 @@ fun VideoPlayerScreen(
                             }
                         },
                         update = { playerView ->
-                            if (playerView is PlayerView) {
-                                playerView.player = exoPlayer
-                                playerView.resizeMode = resizeMode
-                            }
+                            try {
+                                if (playerView is PlayerView) {
+                                    playerView.player = exoPlayer
+                                    playerView.resizeMode = resizeMode
+                                }
+                            } catch (_: Throwable) {}
                         },
                         modifier = Modifier.fillMaxSize()
                     )

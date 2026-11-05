@@ -62,8 +62,32 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                 // Background thread errors (network, ExoPlayer codecs, image loading, GC) -> suppress to keep app alive
                 Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
             } else {
-                Log.e("NafiTvApp", "Uncaught exception on UI thread: $msg", throwable)
-                defaultHandler?.uncaughtException(thread, throwable)
+                Log.e("NafiTvApp", "Intercepted exception on UI thread: $msg", throwable)
+                val isRecoverableUiOrPlayerCrash = throwable is NullPointerException ||
+                        throwable is IllegalArgumentException ||
+                        throwable is IllegalStateException ||
+                        throwable is IndexOutOfBoundsException ||
+                        throwable is SecurityException ||
+                        throwable is java.io.IOException ||
+                        throwable.javaClass.name.contains("media3", ignoreCase = true) ||
+                        throwable.javaClass.name.contains("exoplayer", ignoreCase = true) ||
+                        throwable.javaClass.name.contains("compose", ignoreCase = true) ||
+                        throwable.javaClass.name.contains("View", ignoreCase = true) ||
+                        throwable.javaClass.name.contains("Window", ignoreCase = true)
+
+                if (isRecoverableUiOrPlayerCrash) {
+                    Log.w("NafiTvApp", "Gracefully absorbed UI/Player exception on main thread to keep app alive: ${throwable.javaClass.simpleName} - $msg")
+                    while (true) {
+                        try {
+                            Looper.loop()
+                            break
+                        } catch (t: Throwable) {
+                            Log.e("NafiTvApp", "Absorbed secondary loop exception: ${t.javaClass.simpleName} - ${t.message}")
+                        }
+                    }
+                } else {
+                    defaultHandler?.uncaughtException(thread, throwable)
+                }
             }
         }
     }
