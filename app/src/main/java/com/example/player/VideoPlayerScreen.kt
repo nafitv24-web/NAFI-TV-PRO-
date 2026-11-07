@@ -1592,30 +1592,27 @@ fun VideoPlayerScreen(
                             } catch (_: Exception) {}
                         }
 
-                        // 2.2 Retry single server stream with alternate User-Agent and fresh connection before auto-skip
-                        if (allServers.size <= 1 && playerRetryKey < 2 && !currentMedia.isSeries) {
+                        // 2.2 Retry single server stream with alternate User-Agent and fresh connection once before auto-skip
+                        if (allServers.size <= 1 && playerRetryKey < 1 && !currentMedia.isSeries) {
                             playerRetryKey++
                             errorMessage = null
                             return
                         }
 
-                        // 3. If multiple servers exist and all were exhausted, cycle back to Server 1 of the same channel
-                        if (allServers.size > 1 && selectedServerIndex >= allServers.size - 1 && playerRetryKey < 2) {
-                            playerRetryKey++
-                            pendingServerSwitchIndex = 0
-                            errorMessage = null
-                            return
-                        }
-
-                        // 4. Keep user on their chosen channel and display clear status with retry affordance
-                        val activeServerName = currentServers.getOrNull(selectedServerIndex)?.name?.takeIf { it.isNotBlank() } ?: "সার্ভার ${selectedServerIndex + 1}"
-                        errorMessage = "$activeServerName: ভিডিও সংযোগ ব্যাহত হয়েছে। বিকল্প সার্ভার বেছে নিন অথবা পুনরায় চেষ্টা করুন।"
+                        // 3. If multiple servers exist and all were exhausted, auto-play the next channel
+                        // 4. Automatic Next Channel Playback on connection failure
+                        val nextChannelMsg = "${currentMedia.title} সংযোগ ব্যাহত হয়েছে। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেল চালানো হচ্ছে..."
+                        android.widget.Toast.makeText(context, nextChannelMsg, android.widget.Toast.LENGTH_SHORT).show()
+                        errorMessage = null
+                        playerRetryKey = 0
+                        pendingChannelSwitchDelta = 1
                     }
                 })
             }
         } catch (t: Throwable) {
             android.util.Log.e("VideoPlayerScreen", "Fatal error creating ExoPlayer", t)
-            errorMessage = "ভিডিও প্লেয়ার প্রস্তুত করা যাচ্ছে না। অনুগ্রহ করে বিকল্প সার্ভার চেষ্টা করুন।"
+            errorMessage = null
+            pendingChannelSwitchDelta = 1
             try {
                 ExoPlayer.Builder(context).build().apply {
                     playWhenReady = false
@@ -1627,13 +1624,13 @@ fun VideoPlayerScreen(
     }
 
     // Dead / Unplayable Channel Watchdog on initial load:
-    // If a selected channel has never started playing within 12 seconds,
-    // tries the next alternative server of the SAME channel if available, but NEVER auto-switches away to another channel
+    // If a selected channel has not started playing within 8 seconds,
+    // tries alternative server or automatically plays the next channel!
     val isChannelOrLive = currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT
     LaunchedEffect(currentMedia.id, currentUrl, hasStartedPlaying) {
         if (!hasStartedPlaying && isChannelOrLive) {
             if (currentUrl.isBlank()) {
-                delay(800)
+                delay(600)
                 if (!hasStartedPlaying) {
                     val allServers = currentMedia.getAllServers()
                     if (allServers.size > 1 && selectedServerIndex < allServers.size - 1) {
@@ -1642,14 +1639,15 @@ fun VideoPlayerScreen(
                         android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                         pendingServerSwitchIndex = nextIdx
                     } else {
-                        errorMessage = "এই চ্যানেলের স্ট্রিমিং লিঙ্ক খালি। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন।"
+                        android.widget.Toast.makeText(context, "এই চ্যানেলটি অনুপলব্ধ। পরবর্তী চ্যানেল চালানো হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
+                        pendingChannelSwitchDelta = 1
                     }
                 }
                 return@LaunchedEffect
             }
 
-            // Resilient connection timeout: 12 seconds
-            delay(12000)
+            // Connection watchdog timeout: 8 seconds
+            delay(8000)
             if (!hasStartedPlaying) {
                 val allServers = currentMedia.getAllServers()
                 if (allServers.size > 1 && selectedServerIndex < allServers.size - 1) {
@@ -1658,7 +1656,10 @@ fun VideoPlayerScreen(
                     android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                     pendingServerSwitchIndex = nextIdx
                 } else {
-                    errorMessage = "চ্যানেল সংযোগে বিলম্ব হচ্ছে। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন অথবা পুনরায় চেষ্টা করুন।"
+                    android.widget.Toast.makeText(context, "${currentMedia.title} প্লে হচ্ছে না। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেল প্লে হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
+                    errorMessage = null
+                    playerRetryKey = 0
+                    pendingChannelSwitchDelta = 1
                 }
             }
         }
@@ -1882,6 +1883,17 @@ fun VideoPlayerScreen(
             val delta = pendingChannelSwitchDelta
             pendingChannelSwitchDelta = 0
             switchChannel(delta)
+        }
+    }
+
+    // Auto-skip to next channel if error message persists for more than 3 seconds
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null && !currentMedia.isSeries) {
+            delay(3000)
+            if (errorMessage != null) {
+                errorMessage = null
+                switchChannel(1)
+            }
         }
     }
 
@@ -4492,7 +4504,7 @@ fun VideoPlayerScreen(
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(38.dp)
+                                                .size(44.dp)
                                                 .clip(CircleShape)
                                                 .background(Color.White),
                                             contentAlignment = Alignment.Center
@@ -4502,7 +4514,7 @@ fun VideoPlayerScreen(
                                                     model = item.logoUrl,
                                                     contentDescription = item.title,
                                                     contentScale = ContentScale.Fit,
-                                                    modifier = Modifier.size(32.dp).clip(CircleShape)
+                                                    modifier = Modifier.size(38.dp).clip(CircleShape)
                                                 )
                                             } else {
                                                 val initials = item.title.take(3).uppercase()
@@ -4510,41 +4522,25 @@ fun VideoPlayerScreen(
                                                     text = initials,
                                                     color = Color(0xFF0F172A),
                                                     fontWeight = FontWeight.Black,
-                                                    fontSize = 10.sp
+                                                    fontSize = 11.sp
                                                 )
                                             }
                                         }
-                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .height(18.dp),
+                                                .height(20.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
                                                 text = item.title,
                                                 color = if (isCurrent) Color(0xFF00E5FF) else Color.White,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 10.5.sp,
+                                                fontSize = 11.sp,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 textAlign = TextAlign.Center
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = Color(0xFF0F172A),
-                                            border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF334155))
-                                        ) {
-                                            Text(
-                                                text = item.country ?: item.category.take(8).ifBlank { "Live" },
-                                                color = if (isCurrent) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                                fontSize = 8.5.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                     }

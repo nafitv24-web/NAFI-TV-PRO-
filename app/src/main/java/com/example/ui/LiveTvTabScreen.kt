@@ -380,18 +380,18 @@ fun LiveTvTabScreen(
                                         contentDescription = channel.title,
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier
-                                            .size(40.dp)
+                                            .size(44.dp)
                                             .clip(RoundedCornerShape(6.dp))
                                     )
                                 } else {
                                     Box(
                                         modifier = Modifier
-                                            .size(40.dp)
+                                            .size(44.dp)
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(Color(0xFF0F172A)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(Icons.Rounded.LiveTv, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(22.dp))
+                                        Icon(Icons.Rounded.LiveTv, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(24.dp))
                                     }
                                 }
 
@@ -400,21 +400,11 @@ fun LiveTvTabScreen(
                                 Text(
                                     text = channel.title,
                                     color = Color.White,
-                                    fontSize = 11.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-
-                                if (!channel.category.isNullOrBlank()) {
-                                    Text(
-                                        text = channel.category!!,
-                                        color = Color(0xFF94A3B8),
-                                        fontSize = 9.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
                             }
 
                             // Top-Start Corner: Active green indicator / Offline red indicator

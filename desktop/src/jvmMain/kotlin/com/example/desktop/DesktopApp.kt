@@ -825,18 +825,8 @@ fun DesktopNafiTvApp() {
                                         text = item.title,
                                         color = Color.White,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 13.sp,
+                                        fontSize = 13.5.sp,
                                         maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    Text(
-                                        text = item.category,
-                                        color = Color(0xFF64748B),
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
