@@ -228,6 +228,7 @@ fun AdminControlAppScreen(
     var ottHubPassword by remember { mutableStateOf("") }
     var ottHubLogoUrl by remember { mutableStateOf("") }
     var ottHubIsSaving by remember { mutableStateOf(false) }
+    var ottHubEditingId by remember { mutableStateOf<String?>(null) }
 
     // Playlist Form State
     var playlistTitle by remember { mutableStateOf("") }
@@ -2878,6 +2879,42 @@ fun AdminControlAppScreen(
                                 }
                             }
 
+                            // Edit mode banner
+                            if (ottHubEditingId != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFF0284C7).copy(alpha = 0.25f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Rounded.Edit, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("এডিট মোড সক্রিয়: '$ottHubName'", color = Color(0xFF00E5FF), fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        Text(
+                                            "বাতিল",
+                                            color = Color(0xFFEF4444),
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.clickable {
+                                                ottHubEditingId = null
+                                                ottHubName = ""
+                                                ottHubUrl = ""
+                                                ottHubUsername = ""
+                                                ottHubPassword = ""
+                                                ottHubLogoUrl = ""
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
                             // Type Selector: XTREAM vs M3U
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2984,8 +3021,9 @@ fun AdminControlAppScreen(
                                     coroutineScope.launch {
                                         try {
                                             if (ottHubType == "XTREAM") {
+                                                val targetId = ottHubEditingId ?: "xtream_ott_${System.currentTimeMillis()}"
                                                 val acc = com.example.model.XtreamAccount(
-                                                    id = "xtream_ott_${System.currentTimeMillis()}",
+                                                    id = targetId,
                                                     name = ottHubName.trim(),
                                                     serverUrl = ottHubUrl.trim(),
                                                     username = ottHubUsername.trim(),
@@ -3017,8 +3055,9 @@ fun AdminControlAppScreen(
                                                     cleanUrl = "https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u"
                                                 }
 
+                                                val targetId = ottHubEditingId ?: "pl_ott_${System.currentTimeMillis()}"
                                                 val newPl = PlaylistInfo(
-                                                    id = "pl_ott_${System.currentTimeMillis()}",
+                                                    id = targetId,
                                                     title = ottHubName.trim(),
                                                     url = cleanUrl,
                                                     logoUrl = ottHubLogoUrl.trim().takeIf { it.isNotBlank() },
@@ -3042,6 +3081,7 @@ fun AdminControlAppScreen(
                                             onDataChanged()
                                             Toast.makeText(context, "✅ '$ottHubName' ফায়ারবেস এবং মুভি সেকশনে যুক্ত ও সিঙ্ক হয়েছে!", Toast.LENGTH_LONG).show()
                                             // Reset
+                                            ottHubEditingId = null
                                             ottHubName = ""
                                             ottHubUrl = ""
                                             ottHubUsername = ""
@@ -3066,7 +3106,7 @@ fun AdminControlAppScreen(
                                 } else {
                                     Icon(Icons.Rounded.CloudDone, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("ওটিটি মুভি সার্ভার সংরক্ষণ ও সিঙ্ক করুন", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text(if (ottHubEditingId != null) "ওটিটি প্ল্যাটফর্ম আপডেট ও সিঙ্ক করুন" else "ওটিটি মুভি সার্ভার সংরক্ষণ ও সিঙ্ক করুন", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -3153,6 +3193,7 @@ fun AdminControlAppScreen(
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 IconButton(
                                                     onClick = {
+                                                        ottHubEditingId = acc.id
                                                         ottHubName = acc.name
                                                         ottHubUrl = acc.serverUrl
                                                         ottHubUsername = acc.username
@@ -3167,10 +3208,17 @@ fun AdminControlAppScreen(
                                                 }
                                                 IconButton(
                                                     onClick = {
-                                                        repository.deleteXtreamAccount(acc.id)
-                                                        xtreamAccountsList = repository.getXtreamAccounts()
-                                                        onDataChanged()
-                                                        Toast.makeText(context, "মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        coroutineScope.launch {
+                                                            try {
+                                                                repository.deleteXtreamAccount(acc.id)
+                                                                repository.deleteFromFirebase(acc.id, MediaType.MOVIE)
+                                                                xtreamAccountsList = repository.getXtreamAccounts()
+                                                                onDataChanged()
+                                                                Toast.makeText(context, "সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                            } catch (e: Exception) {
+                                                                Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
                                                     },
                                                     modifier = Modifier.size(32.dp)
                                                 ) {
@@ -3239,6 +3287,7 @@ fun AdminControlAppScreen(
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 IconButton(
                                                     onClick = {
+                                                        ottHubEditingId = pl.id
                                                         ottHubName = pl.title
                                                         ottHubUrl = pl.url
                                                         ottHubLogoUrl = pl.logoUrl ?: ""
@@ -3251,10 +3300,15 @@ fun AdminControlAppScreen(
                                                 }
                                                 IconButton(
                                                     onClick = {
-                                                        repository.deleteAdminPlaylist(pl.id)
-                                                        repository.deleteCustomPlaylist(pl.id)
-                                                        onDataChanged()
-                                                        Toast.makeText(context, "মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        coroutineScope.launch {
+                                                            try {
+                                                                repository.deletePlaylist(pl.id)
+                                                                onDataChanged()
+                                                                Toast.makeText(context, "প্লেলিস্ট ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                            } catch (e: Exception) {
+                                                                Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
                                                     },
                                                     modifier = Modifier.size(32.dp)
                                                 ) {
@@ -4608,9 +4662,17 @@ fun AdminControlAppScreen(
                                 if (xtreamAccountsList.size > 1) {
                                     TextButton(
                                         onClick = {
-                                            repository.deleteXtreamAccount(account.id)
-                                            xtreamAccountsList = repository.getXtreamAccounts()
-                                            Toast.makeText(context, "সার্ভার মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                            coroutineScope.launch {
+                                                try {
+                                                    repository.deleteXtreamAccount(account.id)
+                                                    repository.deleteFromFirebase(account.id, MediaType.MOVIE)
+                                                    xtreamAccountsList = repository.getXtreamAccounts()
+                                                    onDataChanged()
+                                                    Toast.makeText(context, "সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
                                         },
                                         colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFEF4444))
                                     ) {

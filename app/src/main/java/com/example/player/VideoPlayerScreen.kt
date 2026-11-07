@@ -1146,12 +1146,12 @@ fun VideoPlayerScreen(
         }
 
         // High-responsiveness Adaptive Bitrate Track Selection:
-        // Automatically steps down resolution in 150ms if bandwidth drops to prevent any buffering stalls,
-        // and upgrades smoothly to HD when network throughput is proven stable.
+        // Automatically steps down resolution if bandwidth drops to prevent any buffering stalls,
+        // and upgrades smoothly to HD when network throughput is proven stable without discarding buffered frames.
         val adaptiveTrackSelectionFactory = androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
             /* minDurationForQualityIncreaseMs = */ 4000,
-            /* maxDurationForQualityDecreaseMs = */ 150,  // 150ms ultra-rapid downscaling on network drop to prevent stalls
-            /* minDurationToRetainAfterDiscardMs = */ 1500,
+            /* maxDurationForQualityDecreaseMs = */ 200,
+            /* minDurationToRetainAfterDiscardMs = */ 3000,
             /* bandwidthFraction = */ 0.75f               // 75% bandwidth headroom prevents buffer exhaustion
         )
 
@@ -1176,24 +1176,24 @@ fun VideoPlayerScreen(
         val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRamDevice = actManager?.isLowRamDevice == true || (Runtime.getRuntime().maxMemory() / (1024 * 1024)) <= 128
 
-        // Ultra-low latency, zero-buffering LoadControl: starts playback in 50ms without waiting for chunks
+        // Smooth, zero-buffering LoadControl: provides a resilient 15s-50s buffer cushion so channels play continuously without buffering freezes
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, if (isLowRamDevice) 32 * 1024 else 64 * 1024))
             .setBufferDurationsMs(
-                /* minBufferMs = */ if (isLiveStream) 1200 else if (isLowRamDevice) 1500 else 3000,
-                /* maxBufferMs = */ if (isLiveStream) 5000 else if (isLowRamDevice) 4000 else 12000,
-                /* bufferForPlaybackMs = */ if (isLiveStream) 50 else 100,
-                /* bufferForPlaybackAfterRebufferMs = */ if (isLiveStream) 150 else 250
+                /* minBufferMs = */ if (isLiveStream) 15000 else if (isLowRamDevice) 10000 else 25000,
+                /* maxBufferMs = */ if (isLiveStream) 50000 else if (isLowRamDevice) 25000 else 90000,
+                /* bufferForPlaybackMs = */ if (isLiveStream) 1000 else 1500,
+                /* bufferForPlaybackAfterRebufferMs = */ if (isLiveStream) 2500 else 3000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(0, false)
+            .setBackBuffer(10000, false)
             .setTargetBufferBytes(
                 if (isLowRamDevice) {
-                    if (isLiveStream) 2 * 1024 * 1024 else 4 * 1024 * 1024
+                    if (isLiveStream) 8 * 1024 * 1024 else 16 * 1024 * 1024
                 } else if (isLiveStream) {
-                    6 * 1024 * 1024
+                    32 * 1024 * 1024
                 } else {
-                    16 * 1024 * 1024
+                    64 * 1024 * 1024
                 }
             )
             .build()

@@ -2431,30 +2431,57 @@ class MediaRepository(private val context: Context) {
         url: String = getSavedFirebaseUrl()
     ): Boolean = withContext(Dispatchers.IO) {
         var anySuccess = false
+        addDeletedId(id)
 
-        val collections = listOf("events", "sports", "matches", "channels", "movies", "playlists", "movie_playlists", "xtream_accounts", "custom")
-        val databases = listOf(FIRESTORE_DATABASE_ID)
+        val collections = listOf("events", "sports", "matches", "channels", "movies", "playlists", "movie_playlists", "xtream_accounts", "ott_playlists", "admin_playlists", "custom")
+        val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
         val safeId = java.net.URLEncoder.encode(id, "UTF-8").replace("+", "%20")
+        val token = authManager.getValidIdToken()
 
         coroutineScope {
-            // 1. Delete from Firestore REST in parallel
+            // 1. Delete from Firestore REST in parallel across all known databases & collections
             val fsJobs = databases.flatMap { dbId ->
                 collections.map { col ->
                     async {
                         try {
                             val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$col/$safeId?key=$FIREBASE_API_KEY"
-                            val req = Request.Builder().url(fsUrl).delete().build()
-                            val resp = client.newCall(req).execute()
+                            val reqBuilder = Request.Builder().url(fsUrl).delete()
+                            if (!token.isNullOrBlank() && !token.startsWith("admin_master_") && !token.startsWith("local_admin_")) {
+                                reqBuilder.header("Authorization", "Bearer $token")
+                            }
+                            val resp = client.newCall(reqBuilder.build()).execute()
                             resp.isSuccessful
                         } catch (_: Exception) { false }
                     }
                 }
             }
 
+            // Also record deleted ID document in Firestore so users receive deletion even if they have stale local cache
+            val markFsJob = databases.map { dbId ->
+                async {
+                    try {
+                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/deleted_ids/$safeId?key=$FIREBASE_API_KEY"
+                        val bodyObj = JSONObject().apply {
+                            put("fields", JSONObject().apply {
+                                put("id", JSONObject().put("stringValue", id))
+                                put("deleted_at", JSONObject().put("integerValue", System.currentTimeMillis().toString()))
+                            })
+                        }
+                        val body = bodyObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                        val reqBuilder = Request.Builder().url(fsUrl).patch(body)
+                        if (!token.isNullOrBlank() && !token.startsWith("admin_master_") && !token.startsWith("local_admin_")) {
+                            reqBuilder.header("Authorization", "Bearer $token")
+                        }
+                        val resp = client.newCall(reqBuilder.build()).execute()
+                        resp.isSuccessful
+                    } catch (_: Exception) { false }
+                }
+            }
+
             // 2. Delete from Realtime Database in parallel
             val rtdbJobs = if (url.isNotBlank()) {
                 val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
-                collections.map { col ->
+                val delJobs = collections.map { col ->
                     async {
                         try {
                             val targetUrl = appendRtdbAuth("$cleanUrl/$col/$safeId.json")
@@ -2464,9 +2491,20 @@ class MediaRepository(private val context: Context) {
                         } catch (_: Exception) { false }
                     }
                 }
+
+                // Also record deleted_ids in RTDB so all user apps sync and filter it out automatically!
+                val markRtdbJob = async {
+                    try {
+                        val markUrl = appendRtdbAuth("$cleanUrl/deleted_ids/$safeId.json")
+                        val req = Request.Builder().url(markUrl).put("true".toRequestBody("application/json".toMediaTypeOrNull())).build()
+                        val resp = client.newCall(req).execute()
+                        resp.isSuccessful
+                    } catch (_: Exception) { false }
+                }
+                delJobs + listOf(markRtdbJob)
             } else emptyList()
 
-            val allResults = fsJobs.awaitAll() + rtdbJobs.awaitAll()
+            val allResults = fsJobs.awaitAll() + markFsJob.awaitAll() + rtdbJobs.awaitAll()
             anySuccess = allResults.any { it }
         }
         anySuccess
@@ -3461,8 +3499,20 @@ class MediaRepository(private val context: Context) {
     }
 
     fun deleteXtreamAccount(id: String) {
+        addDeletedId(id)
         val current = getXtreamAccounts().filterNot { it.id == id }
         saveXtreamAccountsList(current)
+        memoryFileCache.remove("cache_xtream_movies_$id.json")
+        memoryFileCache.remove("cache_xtream_live_$id.json")
+        try { java.io.File(context.filesDir, "cache_xtream_movies_$id.json").delete() } catch (_: Exception) {}
+        try { java.io.File(context.filesDir, "cache_xtream_live_$id.json").delete() } catch (_: Exception) {}
+        val curMovies = getCachedMoviesList()
+        if (curMovies.isNotEmpty()) {
+            val filtered = curMovies.filterNot { it.id.startsWith("xtream_${id}_") || it.id.startsWith(id) }
+            if (filtered.size != curMovies.size) {
+                saveCachedMoviesList(filtered)
+            }
+        }
     }
 
     fun saveXtreamAccountsList(list: List<com.example.model.XtreamAccount>) {
@@ -3487,13 +3537,15 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getActiveXtreamAccounts(): List<com.example.model.XtreamAccount> {
-        return getXtreamAccounts().filter { it.isEnabled }
+        val deleted = getDeletedIds()
+        return getXtreamAccounts().filter { it.isEnabled && !deleted.contains(it.id) }
     }
 
     suspend fun pushXtreamAccountToFirebase(account: com.example.model.XtreamAccount, url: String = getSavedFirebaseUrl()): Boolean = withContext(Dispatchers.IO) {
         var success = false
+        removeDeletedId(account.id)
         try {
-            // 1. Push to Firestore
+            // 1. Push to Firestore (both custom and default)
             val firestoreObj = JSONObject()
             val fields = JSONObject()
             fields.put("id", JSONObject().put("stringValue", account.id))
@@ -3512,13 +3564,17 @@ class MediaRepository(private val context: Context) {
             fields.put("statusMessage", JSONObject().put("stringValue", account.statusMessage ?: "Active"))
             firestoreObj.put("fields", fields)
 
+            val token = authManager.getValidIdToken()
             val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
             for (dbId in databases) {
                 try {
                     val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/xtream_accounts/${account.id}?key=$FIREBASE_API_KEY"
-                    val req = Request.Builder().url(fsUrl).patch(fsBody).build()
-                    val resp = client.newCall(req).execute()
+                    val reqBuilder = Request.Builder().url(fsUrl).patch(fsBody)
+                    if (!token.isNullOrBlank() && !token.startsWith("admin_master_") && !token.startsWith("local_admin_")) {
+                        reqBuilder.header("Authorization", "Bearer $token")
+                    }
+                    val resp = client.newCall(reqBuilder.build()).execute()
                     if (resp.isSuccessful) success = true
                 } catch (_: Exception) {}
             }
@@ -3526,7 +3582,7 @@ class MediaRepository(private val context: Context) {
             e.printStackTrace()
         }
 
-        // 2. Push to RTDB
+        // 2. Push to RTDB & unmark from deleted_ids
         if (url.isNotBlank()) {
             try {
                 val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
@@ -3549,6 +3605,10 @@ class MediaRepository(private val context: Context) {
                 val req = Request.Builder().url(targetUrl).put(body).build()
                 val resp = client.newCall(req).execute()
                 if (resp.isSuccessful) success = true
+
+                // Remove from deleted_ids list in RTDB
+                val unmarkUrl = appendRtdbAuth("$cleanUrl/deleted_ids/${account.id}.json")
+                try { client.newCall(Request.Builder().url(unmarkUrl).delete().build()).execute() } catch (_: Exception) {}
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -3557,6 +3617,7 @@ class MediaRepository(private val context: Context) {
     }
 
     suspend fun fetchXtreamAccountsFromFirebase(url: String = getSavedFirebaseUrl()): List<com.example.model.XtreamAccount> = withContext(Dispatchers.IO) {
+        val deleted = getDeletedIds()
         val list = mutableListOf<com.example.model.XtreamAccount>()
         // 1. Fetch from Firestore
         val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
@@ -3578,7 +3639,7 @@ class MediaRepository(private val context: Context) {
                                 fun b(k: String, def: Boolean): Boolean = fields.optJSONObject(k)?.optBoolean("booleanValue", def) ?: def
                                 val docId = doc.optString("name").substringAfterLast("/")
                                 val id = s("id").ifBlank { docId }
-                                if (id.isNotBlank()) {
+                                if (id.isNotBlank() && !deleted.contains(id)) {
                                     list.add(
                                         com.example.model.XtreamAccount(
                                             id = id,
@@ -3617,35 +3678,37 @@ class MediaRepository(private val context: Context) {
                         val keys = obj.keys()
                         while (keys.hasNext()) {
                             val k = keys.next()
-                            val o = obj.optJSONObject(k) ?: continue
-                            val id = o.optString("id", k)
-                            if (list.none { it.id == id }) {
-                                list.add(
-                                    com.example.model.XtreamAccount(
-                                        id = id,
-                                        name = o.optString("name", "Xtream Server"),
-                                        serverUrl = o.optString("serverUrl"),
-                                        username = o.optString("username"),
-                                        password = o.optString("password"),
-                                        isEnabled = o.optBoolean("isEnabled", true),
-                                        includeLive = o.optBoolean("includeLive", false),
-                                        includeVod = o.optBoolean("includeVod", true),
-                                        includeSeries = o.optBoolean("includeSeries", true),
-                                        logoUrl = o.optString("logoUrl").takeIf { it.isNotBlank() },
-                                        lastSyncTime = o.optLong("lastSyncTime", System.currentTimeMillis()),
-                                        statusMessage = o.optString("statusMessage", "Active")
+                            if (!deleted.contains(k)) {
+                                val o = obj.optJSONObject(k) ?: continue
+                                val id = o.optString("id", k)
+                                if (!deleted.contains(id) && list.none { it.id == id }) {
+                                    list.add(
+                                        com.example.model.XtreamAccount(
+                                            id = id,
+                                            name = o.optString("name", "Xtream Server"),
+                                            serverUrl = o.optString("serverUrl"),
+                                            username = o.optString("username"),
+                                            password = o.optString("password"),
+                                            isEnabled = o.optBoolean("isEnabled", true),
+                                            includeLive = o.optBoolean("includeLive", false),
+                                            includeVod = o.optBoolean("includeVod", true),
+                                            includeSeries = o.optBoolean("includeSeries", true),
+                                            logoUrl = o.optString("logoUrl").takeIf { it.isNotBlank() },
+                                            lastSyncTime = o.optLong("lastSyncTime", System.currentTimeMillis()),
+                                            statusMessage = o.optString("statusMessage", "Active")
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     }
                 }
             } catch (_: Exception) {}
         }
-        val distinct = list.distinctBy { it.id }
+        val distinct = list.distinctBy { it.id }.filterNot { deleted.contains(it.id) }
         if (distinct.isNotEmpty()) {
-            val existing = getXtreamAccounts()
-            val merged = (distinct + existing).distinctBy { it.id }
+            val existing = getXtreamAccounts().filterNot { deleted.contains(it.id) }
+            val merged = (distinct + existing).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
             saveXtreamAccountsList(merged)
         }
         distinct
@@ -5253,6 +5316,13 @@ class MediaRepository(private val context: Context) {
         deleteAdminPlaylist(id)
         deleteUserPlaylist(id)
         clearPlaylistChannelsCache(id)
+        val curMovies = getCachedMoviesList()
+        if (curMovies.isNotEmpty()) {
+            val filtered = curMovies.filterNot { it.id.startsWith("pl_${id}_") || it.id.startsWith(id) }
+            if (filtered.size != curMovies.size) {
+                saveCachedMoviesList(filtered)
+            }
+        }
         return deleteFromFirebase(id, MediaType.LIVE_TV)
     }
 
@@ -5260,13 +5330,14 @@ class MediaRepository(private val context: Context) {
         var success = false
         val isMovie = playlist.isMovieOnly || playlist.isMoviePlaylist || playlist.type.equals("MOVIE", ignoreCase = true) || playlist.id.startsWith("pl_ott_") || playlist.id.startsWith("pl_movie_")
 
-        // 1. Invalidate cached channels for this playlist so newly added/edited URL loads fresh channels
+        // 1. Invalidate cached channels and unmark from deleted list
+        removeDeletedId(playlist.id)
         clearPlaylistChannelsCache(playlist.id)
 
         // 2. Also save to admin local storage immediately
         saveAdminPlaylist(playlist)
 
-        // 3. Push to Firestore (both playlists and movie_playlists collections)
+        // 3. Push to Firestore (both playlists and movie_playlists collections across all databases)
         try {
             val firestoreObj = JSONObject()
             val fields = JSONObject()
@@ -5298,29 +5369,35 @@ class MediaRepository(private val context: Context) {
 
             firestoreObj.put("fields", fields)
             val fsBody = firestoreObj.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val token = authManager.getValidIdToken()
 
             val collections = if (isMovie) listOf("playlists", "movie_playlists") else listOf("playlists")
             val safeId = java.net.URLEncoder.encode(playlist.id, "UTF-8").replace("+", "%20")
-            for (col in collections) {
-                try {
-                    val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$FIRESTORE_DATABASE_ID/documents/$col/$safeId?key=$FIREBASE_API_KEY"
-                    val fsReq = Request.Builder().url(fsUrl).patch(fsBody).build()
-                    val fsResp = client.newCall(fsReq).execute()
-                    if (fsResp.isSuccessful) {
-                        success = true
-                        android.util.Log.d("MediaRepository", "Pushed playlist $safeId to Firestore $col successfully")
-                    } else {
-                        android.util.Log.e("MediaRepository", "Failed pushing playlist $safeId to $col: HTTP ${fsResp.code}")
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+
+            for (dbId in databases) {
+                for (col in collections) {
+                    try {
+                        val fsUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents/$col/$safeId?key=$FIREBASE_API_KEY"
+                        val reqBuilder = Request.Builder().url(fsUrl).patch(fsBody)
+                        if (!token.isNullOrBlank() && !token.startsWith("admin_master_") && !token.startsWith("local_admin_")) {
+                            reqBuilder.header("Authorization", "Bearer $token")
+                        }
+                        val fsResp = client.newCall(reqBuilder.build()).execute()
+                        if (fsResp.isSuccessful) {
+                            success = true
+                            android.util.Log.d("MediaRepository", "Pushed playlist $safeId to Firestore $dbId/$col successfully")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MediaRepository", "Error pushing playlist $safeId", e)
                     }
-                } catch (e: Exception) {
-                    android.util.Log.e("MediaRepository", "Error pushing playlist $safeId", e)
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // 4. Push to RTDB if URL provided
+        // 4. Push to RTDB & unmark from deleted_ids
         if (url.isNotBlank()) {
             try {
                 val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
@@ -5352,6 +5429,10 @@ class MediaRepository(private val context: Context) {
                         if (resp.isSuccessful) success = true
                     } catch (_: Exception) {}
                 }
+
+                // Remove from deleted_ids list in RTDB
+                val unmarkUrl = appendRtdbAuth("$cleanUrl/deleted_ids/$safeId.json")
+                try { client.newCall(Request.Builder().url(unmarkUrl).delete().build()).execute() } catch (_: Exception) {}
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -5360,69 +5441,92 @@ class MediaRepository(private val context: Context) {
     }
 
     suspend fun fetchPlaylistsFromFirebase(url: String = getSavedFirebaseUrl()): List<PlaylistInfo> = withContext(Dispatchers.IO) {
+        // First sync cloud deleted_ids
+        if (url.isNotBlank()) {
+            try {
+                val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
+                val delUrl = appendRtdbAuth("$cleanUrl/deleted_ids.json")
+                val req = Request.Builder().url(delUrl).build()
+                val resp = client.newCall(req).execute()
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()?.trim() ?: ""
+                    if (body.startsWith("{")) {
+                        val obj = JSONObject(body)
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            addDeletedId(keys.next())
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
         val deleted = getDeletedIds()
         coroutineScope {
-            // 1. Fetch from Firestore via documents:runQuery (reliable across all environments)
+            // 1. Fetch from Firestore across databases
             val fsJob = async {
                 val dbList = mutableListOf<PlaylistInfo>()
                 val collections = listOf("playlists", "movie_playlists")
-                for (col in collections) {
-                    try {
-                        val queryUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$FIRESTORE_DATABASE_ID/documents:runQuery?key=$FIREBASE_API_KEY"
-                        val queryBody = JSONObject()
-                        val structuredQuery = JSONObject()
-                        val fromArray = JSONArray().put(JSONObject().put("collectionId", col))
-                        structuredQuery.put("from", fromArray)
-                        queryBody.put("structuredQuery", structuredQuery)
+                val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+                for (dbId in databases) {
+                    for (col in collections) {
+                        try {
+                            val queryUrl = "https://firestore.googleapis.com/v1/projects/$FIREBASE_PROJECT_ID/databases/$dbId/documents:runQuery?key=$FIREBASE_API_KEY"
+                            val queryBody = JSONObject()
+                            val structuredQuery = JSONObject()
+                            val fromArray = JSONArray().put(JSONObject().put("collectionId", col))
+                            structuredQuery.put("from", fromArray)
+                            queryBody.put("structuredQuery", structuredQuery)
 
-                        val req = Request.Builder()
-                            .url(queryUrl)
-                            .post(queryBody.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
-                            .header("User-Agent", "NAFITV24-Android/2.6.5")
-                            .build()
-                        val resp = client.newCall(req).execute()
-                        if (resp.isSuccessful) {
-                            val body = resp.body?.string() ?: ""
-                            if (body.isNotBlank() && body.startsWith("[")) {
-                                val arr = JSONArray(body)
-                                for (i in 0 until arr.length()) {
-                                    val item = arr.optJSONObject(i) ?: continue
-                                    val doc = item.optJSONObject("document") ?: continue
-                                    val name = doc.optString("name", "")
-                                    val docId = name.substringAfterLast("/")
-                                    if (docId.isBlank() || deleted.contains(docId)) continue
+                            val req = Request.Builder()
+                                .url(queryUrl)
+                                .post(queryBody.toString().toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+                                .header("User-Agent", "NAFITV24-Android/2.6.5")
+                                .build()
+                            val resp = client.newCall(req).execute()
+                            if (resp.isSuccessful) {
+                                val body = resp.body?.string() ?: ""
+                                if (body.isNotBlank() && body.startsWith("[")) {
+                                    val arr = JSONArray(body)
+                                    for (i in 0 until arr.length()) {
+                                        val item = arr.optJSONObject(i) ?: continue
+                                        val doc = item.optJSONObject("document") ?: continue
+                                        val name = doc.optString("name", "")
+                                        val docId = name.substringAfterLast("/")
+                                        if (docId.isBlank() || deleted.contains(docId)) continue
 
-                                    val fields = doc.optJSONObject("fields") ?: continue
-                                    fun s(k: String): String = fields.optJSONObject(k)?.optString("stringValue", "") ?: ""
-                                    fun b(k: String, def: Boolean): Boolean = fields.optJSONObject(k)?.optBoolean("booleanValue", def) ?: def
-                                    fun count(k: String): Int = fields.optJSONObject(k)?.optInt("integerValue", 0) ?: 0
+                                        val fields = doc.optJSONObject("fields") ?: continue
+                                        fun s(k: String): String = fields.optJSONObject(k)?.optString("stringValue", "") ?: ""
+                                        fun b(k: String, def: Boolean): Boolean = fields.optJSONObject(k)?.optBoolean("booleanValue", def) ?: def
+                                        fun count(k: String): Int = fields.optJSONObject(k)?.optInt("integerValue", 0) ?: 0
 
-                                    val pId = s("id").ifBlank { docId }
-                                    if (!deleted.contains(pId)) {
-                                        val isMovie = col == "movie_playlists" || b("isMovieOnly", false) || s("type").equals("MOVIE", true) || pId.startsWith("pl_ott_") || pId.startsWith("pl_movie_") || s("description").contains("Movie", true)
-                                        dbList.add(
-                                            PlaylistInfo(
-                                                id = pId,
-                                                title = s("title").ifBlank { s("name").ifBlank { "Playlist" } },
-                                                url = s("url"),
-                                                logoUrl = s("logoUrl").ifBlank { s("logo") }.takeIf { it.isNotBlank() },
-                                                description = s("description").takeIf { it.isNotBlank() },
-                                                channelCount = count("channelCount"),
-                                                serverUrl = s("serverUrl").takeIf { it.isNotBlank() },
-                                                username = s("username").takeIf { it.isNotBlank() },
-                                                password = s("password").takeIf { it.isNotBlank() },
-                                                type = if (isMovie) "MOVIE" else s("type").ifBlank { if (s("serverUrl").isNotBlank() || s("username").isNotBlank()) "XTREAM" else "M3U" },
-                                                isAdmin = true,
-                                                isReadOnly = true,
-                                                isMovieOnly = isMovie
+                                        val pId = s("id").ifBlank { docId }
+                                        if (!deleted.contains(pId)) {
+                                            val isMovie = col == "movie_playlists" || b("isMovieOnly", false) || s("type").equals("MOVIE", true) || pId.startsWith("pl_ott_") || pId.startsWith("pl_movie_") || s("description").contains("Movie", true)
+                                            dbList.add(
+                                                PlaylistInfo(
+                                                    id = pId,
+                                                    title = s("title").ifBlank { s("name").ifBlank { "Playlist" } },
+                                                    url = s("url"),
+                                                    logoUrl = s("logoUrl").ifBlank { s("logo") }.takeIf { it.isNotBlank() },
+                                                    description = s("description").takeIf { it.isNotBlank() },
+                                                    channelCount = count("channelCount"),
+                                                    serverUrl = s("serverUrl").takeIf { it.isNotBlank() },
+                                                    username = s("username").takeIf { it.isNotBlank() },
+                                                    password = s("password").takeIf { it.isNotBlank() },
+                                                    type = if (isMovie) "MOVIE" else s("type").ifBlank { if (s("serverUrl").isNotBlank() || s("username").isNotBlank()) "XTREAM" else "M3U" },
+                                                    isAdmin = true,
+                                                    isReadOnly = true,
+                                                    isMovieOnly = isMovie
+                                                )
                                             )
-                                        )
+                                        }
                                     }
                                 }
                             }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
                 dbList
@@ -5514,16 +5618,10 @@ class MediaRepository(private val context: Context) {
             val allFs = fsJob.await()
             val allRtdb = rtdbJob.await()
             val combined = (allFs + allRtdb).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
-            // Cache in local storage so playlists are available immediately offline and across app restarts
-            if (combined.isNotEmpty()) {
-                saveAdminPlaylistsList((getAdminPlaylists() + combined).distinctBy { it.id })
-            }
-            val moviePls = combined.filter { it.isMovieOnly || it.isMoviePlaylist }
-            if (moviePls.isNotEmpty()) {
-                val currentAdmin = getAdminPlaylists()
-                val merged = (moviePls + currentAdmin).distinctBy { it.id }
-                saveAdminPlaylistsList(merged)
-            }
+            // Cache in local storage, guaranteeing deleted items are removed!
+            val currentAdmin = getAdminPlaylists().filterNot { deleted.contains(it.id) }
+            val merged = (combined + currentAdmin).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
+            saveAdminPlaylistsList(merged)
             combined
         }
     }

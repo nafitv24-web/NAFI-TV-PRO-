@@ -183,9 +183,10 @@ fun MoviesTabScreen(
         val hubs = mutableListOf<MovieHubItem>()
 
         if (repository != null) {
+            val deleted = repository.getDeletedIds()
             // 1. Xtream Codes Accounts configured in Admin Panel (Movie/VOD capable only)
             val xtreamAccounts = repository.getXtreamAccounts().filter {
-                it.isEnabled && (it.includeVod || it.includeSeries || it.id.startsWith("xtream_ott_"))
+                !deleted.contains(it.id) && it.isEnabled && (it.includeVod || it.includeSeries || it.id.startsWith("xtream_ott_"))
             }
             val xtreamGradients = listOf(
                 listOf(Color(0xFF0F766E), Color(0xFF042F2E)), // Emerald/Cyan
@@ -234,7 +235,7 @@ fun MoviesTabScreen(
 
             // 2. Custom & Admin Movie Playlists configured in Admin Panel (Movie playlists only)
             val customPlaylists = (repository.getAdminPlaylists() + repository.getUserPlaylists()).filter {
-                it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || it.isMoviePlaylist || (it.description != null && it.description.contains("OTT Movie", ignoreCase = true))
+                !deleted.contains(it.id) && (it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || it.isMoviePlaylist || (it.description != null && it.description.contains("OTT Movie", ignoreCase = true)))
             }.distinctBy { it.id }
             val plGradients = listOf(
                 listOf(Color(0xFFC2410C), Color(0xFF431407)), // Amber/Orange

@@ -59,8 +59,8 @@ android {
     applicationId = "com.aistudio.nafitv.yxosih"
     minSdk = 24
     targetSdk = 36
-    versionCode = 30
-    versionName = "3.1.4"
+    versionCode = 31
+    versionName = "3.1.5"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

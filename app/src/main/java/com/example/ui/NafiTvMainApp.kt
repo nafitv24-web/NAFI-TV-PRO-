@@ -783,22 +783,25 @@ fun NafiTvMainApp(
             onOpenMovieProvider = { activeMovieBrowserProvider = it },
             onExitAdmin = { isAdminViewActive = false },
             onDataChanged = {
+                val deleted = repository.getDeletedIds()
                 cloudStreamRepos = repository.getSavedCloudStreamRepos()
                 allMovieProviders = repository.getAllMovieProviders()
                 breakingNewsText = repository.getMarqueeTickerText()
-                val initial = repository.getInitialPlaylists()
-                val adminPl = repository.getAdminPlaylists().map { it.copy(isAdmin = true, isReadOnly = true) }
-                val userPl = repository.getUserPlaylists().map { it.copy(isAdmin = false, isReadOnly = false) }
-                adminPlaylistsList = (adminPl + userPl + adminPlaylistsList + initial).distinctBy { it.id }
+                val initial = repository.getInitialPlaylists().filterNot { deleted.contains(it.id) }
+                val adminPl = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
+                val userPl = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
+                adminPlaylistsList = (adminPl + userPl + initial).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
                 playlistsList = adminPlaylistsList.filterNot {
                     it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
                     it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
                     (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
                 }
                 sportsList = repository.getInitialSports().filterNot { repository.isItemDeleted(it) }
-                customList = repository.getCustomStreams()
-                liveTvList = repository.getInitialLiveTv()
-                moviesList = repository.getInitialMoviesSeries()
+                customList = repository.getCustomStreams().filterNot { deleted.contains(it.id) }
+                liveTvList = repository.getInitialLiveTv().filterNot { deleted.contains(it.id) }
+                val cachedMov = repository.getCachedMoviesList().filterNot { deleted.contains(it.id) }
+                val hubMovies = repository.getAllCachedPlaylistAndXtreamMovies().filterNot { deleted.contains(it.id) }
+                moviesList = (hubMovies + cachedMov + repository.getInitialMoviesSeries()).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
                 favoriteIds = repository.getFavoriteIds()
             }
         )
