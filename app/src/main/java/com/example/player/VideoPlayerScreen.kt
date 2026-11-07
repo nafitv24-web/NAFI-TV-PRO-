@@ -1145,14 +1145,14 @@ fun VideoPlayerScreen(
             setAllowedVideoJoiningTimeMs(15000L)
         }
 
-        // High-responsiveness Adaptive Bitrate Track Selection:
-        // Automatically steps down resolution if bandwidth drops to prevent any buffering stalls,
-        // and upgrades smoothly to HD when network throughput is proven stable without discarding buffered frames.
+        // High-responsiveness Adaptive Bitrate Track Selection for Weak Networks:
+        // Automatically steps down resolution immediately if bandwidth drops to prevent any buffering stalls,
+        // and reserves a 35% safety margin so slow or fluctuating networks never run out of buffered data.
         val adaptiveTrackSelectionFactory = androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
-            /* minDurationForQualityIncreaseMs = */ 4000,
-            /* maxDurationForQualityDecreaseMs = */ 200,
-            /* minDurationToRetainAfterDiscardMs = */ 3000,
-            /* bandwidthFraction = */ 0.75f               // 75% bandwidth headroom prevents buffer exhaustion
+            /* minDurationForQualityIncreaseMs = */ 8000,
+            /* maxDurationForQualityDecreaseMs = */ 100,
+            /* minDurationToRetainAfterDiscardMs = */ 2000,
+            /* bandwidthFraction = */ 0.65f // 65% bandwidth fraction leaves a 35% safety margin for weak networks
         )
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context, adaptiveTrackSelectionFactory).apply {
@@ -1176,24 +1176,27 @@ fun VideoPlayerScreen(
         val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRamDevice = actManager?.isLowRamDevice == true || (Runtime.getRuntime().maxMemory() / (1024 * 1024)) <= 128
 
-        // Smooth, zero-buffering LoadControl: provides a resilient 15s-50s buffer cushion so channels play continuously without buffering freezes
+        // Anti-Buffering LoadControl for Weak Networks:
+        // - Starts playing immediately upon receiving 500ms of audio/video
+        // - Rebuffering cushion of only 1000ms ensures rapid recovery without prolonged freezes
+        // - 5s minimum buffer maintains steady throughput on live streams without chasing past the live edge
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, if (isLowRamDevice) 32 * 1024 else 64 * 1024))
             .setBufferDurationsMs(
-                /* minBufferMs = */ if (isLiveStream) 15000 else if (isLowRamDevice) 10000 else 25000,
-                /* maxBufferMs = */ if (isLiveStream) 50000 else if (isLowRamDevice) 25000 else 90000,
-                /* bufferForPlaybackMs = */ if (isLiveStream) 1000 else 1500,
-                /* bufferForPlaybackAfterRebufferMs = */ if (isLiveStream) 2500 else 3000
+                /* minBufferMs = */ if (isLiveStream) 5000 else if (isLowRamDevice) 8000 else 15000,
+                /* maxBufferMs = */ if (isLiveStream) 30000 else if (isLowRamDevice) 20000 else 60000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(10000, false)
+            .setBackBuffer(5000, true)
             .setTargetBufferBytes(
                 if (isLowRamDevice) {
-                    if (isLiveStream) 8 * 1024 * 1024 else 16 * 1024 * 1024
+                    if (isLiveStream) 6 * 1024 * 1024 else 12 * 1024 * 1024
                 } else if (isLiveStream) {
-                    32 * 1024 * 1024
+                    16 * 1024 * 1024
                 } else {
-                    64 * 1024 * 1024
+                    32 * 1024 * 1024
                 }
             )
             .build()
@@ -1271,14 +1274,15 @@ fun VideoPlayerScreen(
                 val isTs = isExplicitTs
 
                 if (isLiveStream && !isTs) {
-                    // Ultra-low latency target: bufferless live playback right at the latest edge
+                    // Safe Live Configuration for Weak Networks: 8s live offset with 3s-25s tolerance
+                    // Prevents exhausting buffer at the live edge on 3G/4G/slow WiFi networks
                     mediaItemBuilder.setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setTargetOffsetMs(1500L)
-                            .setMinOffsetMs(500L)
-                            .setMaxOffsetMs(4000L)
-                            .setMinPlaybackSpeed(0.98f)
-                            .setMaxPlaybackSpeed(1.04f)
+                            .setTargetOffsetMs(8000L)
+                            .setMinOffsetMs(3000L)
+                            .setMaxOffsetMs(25000L)
+                            .setMinPlaybackSpeed(1.0f)
+                            .setMaxPlaybackSpeed(1.0f)
                             .build()
                     )
                 }
@@ -4440,7 +4444,7 @@ fun VideoPlayerScreen(
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(130.dp)
+                                        .height(104.dp)
                                         .onFocusChanged { focusState ->
                                             isFocused = focusState.isFocused
                                             if (focusState.isFocused && !isCurrent) {
@@ -4465,7 +4469,7 @@ fun VideoPlayerScreen(
                                                 onSelectMedia(item)
                                             }
                                         },
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                     colors = CardDefaults.cardColors(
                                         containerColor = when {
                                             isFocused -> Color(0xFF2563EB).copy(alpha = 0.85f)
@@ -4474,21 +4478,21 @@ fun VideoPlayerScreen(
                                         }
                                     ),
                                     border = when {
-                                        isFocused -> androidx.compose.foundation.BorderStroke(2.5.dp, Color(0xFF00E5FF))
-                                        isCurrent -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF00E5FF))
+                                        isFocused -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF00E5FF))
+                                        isCurrent -> androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E5FF))
                                         else -> androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155).copy(alpha = 0.8f))
                                     }
                                 ) {
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                                            .padding(horizontal = 4.dp, vertical = 4.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(46.dp)
+                                                .size(38.dp)
                                                 .clip(CircleShape)
                                                 .background(Color.White),
                                             contentAlignment = Alignment.Center
@@ -4498,7 +4502,7 @@ fun VideoPlayerScreen(
                                                     model = item.logoUrl,
                                                     contentDescription = item.title,
                                                     contentScale = ContentScale.Fit,
-                                                    modifier = Modifier.size(38.dp).clip(CircleShape)
+                                                    modifier = Modifier.size(32.dp).clip(CircleShape)
                                                 )
                                             } else {
                                                 val initials = item.title.take(3).uppercase()
@@ -4506,22 +4510,22 @@ fun VideoPlayerScreen(
                                                     text = initials,
                                                     color = Color(0xFF0F172A),
                                                     fontWeight = FontWeight.Black,
-                                                    fontSize = 11.sp
+                                                    fontSize = 10.sp
                                                 )
                                             }
                                         }
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.height(3.dp))
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .height(24.dp),
+                                                .height(18.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
                                                 text = item.title,
                                                 color = if (isCurrent) Color(0xFF00E5FF) else Color.White,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 11.sp,
+                                                fontSize = 10.5.sp,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
                                                 textAlign = TextAlign.Center
@@ -4529,16 +4533,16 @@ fun VideoPlayerScreen(
                                         }
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Surface(
-                                            shape = RoundedCornerShape(6.dp),
+                                            shape = RoundedCornerShape(4.dp),
                                             color = Color(0xFF0F172A),
                                             border = androidx.compose.foundation.BorderStroke(0.5.dp, Color(0xFF334155))
                                         ) {
                                             Text(
                                                 text = item.country ?: item.category.take(8).ifBlank { "Live" },
                                                 color = if (isCurrent) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                                fontSize = 9.sp,
+                                                fontSize = 8.5.sp,
                                                 fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )

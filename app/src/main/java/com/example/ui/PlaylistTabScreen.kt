@@ -853,7 +853,7 @@ fun PlaylistTabScreen(
                         } else {
                             // Standard Channel Card
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(10.dp),
                                 color = if (isCardFocused) Color(0xFF1E293B) else Color(0xFF0F172A),
                                 border = BorderStroke(
                                     1.dp,
@@ -865,7 +865,7 @@ fun PlaylistTabScreen(
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(if (isTvMode) 130.dp else 115.dp)
+                                    .height(if (isTvMode) 120.dp else 104.dp)
                                     .alpha(if (!isActive) 0.72f else 1.0f)
                                     .onFocusChanged { isCardFocused = it.isFocused }
                                     .focusable()
@@ -875,7 +875,7 @@ fun PlaylistTabScreen(
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(8.dp),
+                                            .padding(6.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
@@ -884,7 +884,7 @@ fun PlaylistTabScreen(
                                                 model = item.logoUrl,
                                                 contentDescription = item.title,
                                                 modifier = Modifier
-                                                    .size(44.dp)
+                                                    .size(40.dp)
                                                     .clip(RoundedCornerShape(6.dp)),
                                                 contentScale = ContentScale.Fit
                                             )
@@ -893,10 +893,10 @@ fun PlaylistTabScreen(
                                                 imageVector = Icons.Rounded.Tv,
                                                 contentDescription = null,
                                                 tint = Color(0xFF00E5FF),
-                                                modifier = Modifier.size(32.dp)
+                                                modifier = Modifier.size(24.dp)
                                             )
                                         }
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             text = item.title,
                                             color = Color.White,

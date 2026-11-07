@@ -321,9 +321,10 @@ fun LiveTvTabScreen(
             val gridState = rememberLazyGridState()
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 130.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                columns = GridCells.Fixed(if (isTvMode) 4 else 3),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 itemsIndexed(filteredChannels, key = { index, it -> "${it.id.ifBlank { "ch" }}_$index" }) { index, channel ->
@@ -331,10 +332,11 @@ fun LiveTvTabScreen(
                     var isFocused by remember { mutableStateOf(false) }
                     val isActive = ChannelStatusManager.isChannelActive(channel)
 
+                    val cardHeight = if (isTvMode) 120.dp else 104.dp
                     val baseModifier = if (isTvMode) {
                         Modifier
                             .fillMaxWidth()
-                            .height(140.dp)
+                            .height(cardHeight)
                             .then(if (index == 0) Modifier.focusRequester(firstChannelFocusRequester) else Modifier)
                             .onFocusChanged { isFocused = it.isFocused }
                             .focusable()
@@ -342,7 +344,7 @@ fun LiveTvTabScreen(
                     } else {
                         Modifier
                             .fillMaxWidth()
-                            .height(140.dp)
+                            .height(cardHeight)
                             .clickable { onSelectMedia(channel, filteredChannels) }
                     }
                     val cardModifier = if (!isActive) {
@@ -352,7 +354,7 @@ fun LiveTvTabScreen(
                     }
 
                     Card(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(10.dp),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
                         border = BorderStroke(
                             1.dp,
@@ -368,7 +370,7 @@ fun LiveTvTabScreen(
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(8.dp),
+                                    .padding(horizontal = 6.dp, vertical = 6.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center
                             ) {
@@ -378,27 +380,27 @@ fun LiveTvTabScreen(
                                         contentDescription = channel.title,
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier
-                                            .size(54.dp)
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp))
                                     )
                                 } else {
                                     Box(
                                         modifier = Modifier
-                                            .size(54.dp)
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp))
                                             .background(Color(0xFF0F172A)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(Icons.Rounded.LiveTv, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(28.dp))
+                                        Icon(Icons.Rounded.LiveTv, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(22.dp))
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(4.dp))
 
                                 Text(
                                     text = channel.title,
                                     color = Color.White,
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -408,7 +410,7 @@ fun LiveTvTabScreen(
                                     Text(
                                         text = channel.category!!,
                                         color = Color(0xFF94A3B8),
-                                        fontSize = 10.sp,
+                                        fontSize = 9.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -418,52 +420,52 @@ fun LiveTvTabScreen(
                             // Top-Start Corner: Active green indicator / Offline red indicator
                             if (isActive) {
                                 Surface(
-                                    shape = RoundedCornerShape(topStart = 12.dp, bottomEnd = 8.dp),
+                                    shape = RoundedCornerShape(topStart = 10.dp, bottomEnd = 6.dp),
                                     color = Color(0xFF064E3B).copy(alpha = 0.95f),
                                     border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.8f)),
                                     modifier = Modifier.align(Alignment.TopStart)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(6.dp)
+                                                .size(5.dp)
                                                 .clip(CircleShape)
                                                 .background(Color(0xFF10B981))
                                         )
                                         Text(
                                             text = "সচল",
                                             color = Color(0xFF6EE7B7),
-                                            fontSize = 9.sp,
+                                            fontSize = 8.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
                             } else {
                                 Surface(
-                                    shape = RoundedCornerShape(topStart = 12.dp, bottomEnd = 8.dp),
+                                    shape = RoundedCornerShape(topStart = 10.dp, bottomEnd = 6.dp),
                                     color = Color(0xFF450A0A).copy(alpha = 0.95f),
                                     border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
                                     modifier = Modifier.align(Alignment.TopStart)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(6.dp)
+                                                .size(5.dp)
                                                 .clip(CircleShape)
                                                 .background(Color(0xFFEF4444))
                                         )
                                         Text(
                                             text = "অফলাইন",
                                             color = Color(0xFFFCA5A5),
-                                            fontSize = 9.sp,
+                                            fontSize = 8.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
@@ -475,13 +477,13 @@ fun LiveTvTabScreen(
                                 onClick = { onToggleFavorite(channel.id) },
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .size(32.dp)
+                                    .size(26.dp)
                             ) {
                                 Icon(
                                     imageVector = if (isFav) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                                     contentDescription = "Favorite",
                                     tint = if (isFav) Color(0xFFF59E0B) else Color(0xFF64748B),
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                             }
                         }
