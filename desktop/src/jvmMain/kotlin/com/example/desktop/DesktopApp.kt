@@ -3,12 +3,15 @@ package com.example.desktop
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.desktop.player.DesktopVlcPlayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -30,6 +35,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.awt.Desktop
 import java.net.URI
+import java.util.concurrent.TimeUnit
 
 data class DesktopMediaItem(
     val id: String,
@@ -44,6 +50,7 @@ data class DesktopMediaItem(
 @Composable
 fun DesktopNafiTvApp() {
     var selectedTab by remember { mutableStateOf(0) } // 0: Live Events, 1: Live TV, 2: Sports Channels, 3: Movies
+    var selectedCategoryFilter by remember { mutableStateOf("সবগুলো") }
     var searchQuery by remember { mutableStateOf("") }
     var currentPlayingItem by remember { mutableStateOf<DesktopMediaItem?>(null) }
     var mediaList by remember { mutableStateOf<List<DesktopMediaItem>>(emptyList()) }
@@ -51,20 +58,356 @@ fun DesktopNafiTvApp() {
 
     val coroutineScope = rememberCoroutineScope()
 
+    // High performance OkHttpClient with timeouts
+    val client = remember {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
+
+    fun extractUrls(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split("\n", "\r", ",")
+            .map { it.trim() }
+            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+    }
+
+    fun parseJsonMedia(content: String, defaultCat: String, isLive: Boolean): List<DesktopMediaItem> {
+        val list = mutableListOf<DesktopMediaItem>()
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return list
+
+        try {
+            if (trimmed.startsWith("{")) {
+                val root = JSONObject(trimmed)
+
+                // 1. Matches / Events schema (Sports_data.json, tapmad_data.json, fancode.json)
+                val matchesArr = root.optJSONArray("matches")
+                    ?: root.optJSONArray("Matches")
+                    ?: root.optJSONArray("events")
+                    ?: root.optJSONArray("data")
+
+                if (matchesArr != null && matchesArr.length() > 0) {
+                    for (i in 0 until matchesArr.length()) {
+                        val mObj = matchesArr.optJSONObject(i) ?: continue
+                        val vName = mObj.optString("event_name", "").ifBlank {
+                            mObj.optString("VideoName", mObj.optString("title", mObj.optString("name", "")))
+                        }.trim()
+                        if (vName.isBlank()) continue
+
+                        val catName = mObj.optString("CategoryName", "").ifBlank {
+                            mObj.optString("Category", mObj.optString("category", defaultCat))
+                        }.trim().ifBlank { defaultCat }
+
+                        val thumb = mObj.optString("ThumbnailStandard", "").ifBlank {
+                            mObj.optString("image", mObj.optString("thumbnail", mObj.optString("logo", "")))
+                        }.trim().takeIf { it.isNotBlank() }
+
+                        val status = mObj.optString("Status", mObj.optString("status", "Live")).trim()
+                        val isLiveEvent = status.contains("live", ignoreCase = true) || isLive
+
+                        // Check streams inside "streams" array
+                        val streamsArr = mObj.optJSONArray("streams")
+                        var addedStream = false
+                        if (streamsArr != null && streamsArr.length() > 0) {
+                            for (sIdx in 0 until streamsArr.length()) {
+                                val sObj = streamsArr.optJSONObject(sIdx) ?: continue
+                                val sUrl = sObj.optString("stream_url", sObj.optString("url", "")).trim()
+                                if (sUrl.startsWith("http://", ignoreCase = true) || sUrl.startsWith("https://", ignoreCase = true)) {
+                                    val chName = sObj.optString("channel_name", "").trim()
+                                    val itemTitle = if (chName.isNotBlank() && streamsArr.length() > 1) "$vName ($chName)" else vName
+                                    list.add(
+                                        DesktopMediaItem(
+                                            id = "event_${list.size}_${sIdx}",
+                                            title = itemTitle,
+                                            category = catName,
+                                            streamUrl = sUrl,
+                                            logoUrl = thumb,
+                                            isLive = isLiveEvent
+                                        )
+                                    )
+                                    addedStream = true
+                                }
+                            }
+                        }
+
+                        // Top-level stream_url or url fallback
+                        if (!addedStream) {
+                            val topStream = mObj.optString("stream_url", mObj.optString("streamUrl", mObj.optString("url", mObj.optString("link", "")))).trim()
+                            if (topStream.startsWith("http://", ignoreCase = true) || topStream.startsWith("https://", ignoreCase = true)) {
+                                list.add(
+                                    DesktopMediaItem(
+                                        id = "event_${list.size}",
+                                        title = vName,
+                                        category = catName,
+                                        streamUrl = topStream,
+                                        logoUrl = thumb,
+                                        isLive = isLiveEvent
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 2. Categories / Movies / Channels schema (e.g. Update Channel.m3u [JSON], movies.json)
+                val catArr = root.optJSONArray("categories")
+                    ?: root.optJSONArray("list")
+                    ?: root.optJSONArray("data")
+                    ?: root.optJSONArray("movies")
+
+                if (catArr != null && catArr.length() > 0) {
+                    for (cIdx in 0 until catArr.length()) {
+                        val cObj = catArr.optJSONObject(cIdx) ?: continue
+                        val catTitle = cObj.optString("category_name", cObj.optString("name", cObj.optString("title", defaultCat))).trim().ifBlank { defaultCat }
+
+                        val innerItems = cObj.optJSONArray("movies")
+                            ?: cObj.optJSONArray("channels")
+                            ?: cObj.optJSONArray("items")
+                            ?: cObj.optJSONArray("content")
+                            ?: cObj.optJSONArray("streams")
+
+                        if (innerItems != null) {
+                            for (mIdx in 0 until innerItems.length()) {
+                                val itemObj = innerItems.optJSONObject(mIdx) ?: continue
+                                val title = itemObj.optString("title", itemObj.optString("name", itemObj.optString("channel_name", ""))).trim()
+                                if (title.isBlank()) continue
+
+                                val poster = itemObj.optString("poster", itemObj.optString("image", itemObj.optString("logo", itemObj.optString("thumbnail", "")))).trim().takeIf { it.isNotBlank() }
+
+                                // Check sources array
+                                var streamUrl = ""
+                                val sources = itemObj.optJSONArray("sources")
+                                if (sources != null && sources.length() > 0) {
+                                    val firstSrc = sources.optJSONObject(0)
+                                    streamUrl = firstSrc?.optString("url", firstSrc.optString("stream_url", ""))?.trim() ?: ""
+                                }
+                                if (streamUrl.isBlank()) {
+                                    streamUrl = itemObj.optString("url", itemObj.optString("stream_url", itemObj.optString("link", ""))).trim()
+                                }
+
+                                if (streamUrl.startsWith("http://", ignoreCase = true) || streamUrl.startsWith("https://", ignoreCase = true)) {
+                                    list.add(
+                                        DesktopMediaItem(
+                                            id = "json_${list.size}_${mIdx}",
+                                            title = title,
+                                            category = catTitle,
+                                            streamUrl = streamUrl,
+                                            logoUrl = poster,
+                                            isLive = isLive
+                                        )
+                                    )
+                                }
+                            }
+                        } else {
+                            // Flat item inside category array
+                            val title = cObj.optString("title", cObj.optString("name", "")).trim()
+                            val stream = cObj.optString("url", cObj.optString("stream_url", "")).trim()
+                            val poster = cObj.optString("poster", cObj.optString("image", cObj.optString("logo", ""))).trim().takeIf { it.isNotBlank() }
+                            if (title.isNotBlank() && (stream.startsWith("http://", ignoreCase = true) || stream.startsWith("https://", ignoreCase = true))) {
+                                list.add(
+                                    DesktopMediaItem(
+                                        id = "json_flat_${list.size}",
+                                        title = title,
+                                        category = defaultCat,
+                                        streamUrl = stream,
+                                        logoUrl = poster,
+                                        isLive = isLive
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (trimmed.startsWith("[")) {
+                // Flat Array of items/channels/movies
+                val rootArr = JSONArray(trimmed)
+                for (i in 0 until rootArr.length()) {
+                    val itemObj = rootArr.optJSONObject(i) ?: continue
+                    val title = itemObj.optString("title", itemObj.optString("name", itemObj.optString("event_name", itemObj.optString("channel_name", "")))).trim()
+                    if (title.isBlank()) continue
+
+                    val cat = itemObj.optString("category_name", itemObj.optString("category", itemObj.optString("Category", defaultCat))).trim().ifBlank { defaultCat }
+                    val poster = itemObj.optString("poster", itemObj.optString("image", itemObj.optString("logo", itemObj.optString("thumbnail", "")))).trim().takeIf { it.isNotBlank() }
+
+                    var stream = itemObj.optString("stream_url", itemObj.optString("url", itemObj.optString("link", ""))).trim()
+                    if (stream.isBlank()) {
+                        val sources = itemObj.optJSONArray("sources") ?: itemObj.optJSONArray("streams")
+                        if (sources != null && sources.length() > 0) {
+                            val firstSrc = sources.optJSONObject(0)
+                            stream = firstSrc?.optString("url", firstSrc.optString("stream_url", ""))?.trim() ?: ""
+                        }
+                    }
+
+                    if (stream.startsWith("http://", ignoreCase = true) || stream.startsWith("https://", ignoreCase = true)) {
+                        list.add(
+                            DesktopMediaItem(
+                                id = "arr_${list.size}_$i",
+                                title = title,
+                                category = cat,
+                                streamUrl = stream,
+                                logoUrl = poster,
+                                isLive = isLive
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return list
+    }
+
+    fun parseM3uMedia(content: String, defaultCat: String, isLive: Boolean): List<DesktopMediaItem> {
+        val list = mutableListOf<DesktopMediaItem>()
+        val lines = content.lines()
+        var curTitle = ""
+        var curLogo: String? = null
+        var curGroup = defaultCat
+
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("#EXTINF:", ignoreCase = true)) {
+                curTitle = trimmed.substringAfterLast(",").trim()
+                if (trimmed.contains("tvg-logo=\"")) {
+                    curLogo = trimmed.substringAfter("tvg-logo=\"").substringBefore("\"").trim().takeIf { it.isNotBlank() }
+                }
+                if (trimmed.contains("group-title=\"")) {
+                    curGroup = trimmed.substringAfter("group-title=\"").substringBefore("\"").trim().ifBlank { defaultCat }
+                }
+            } else if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+                if (curTitle.isNotBlank()) {
+                    var finalUrl = trimmed
+                    if (finalUrl.contains(" ")) {
+                        finalUrl = finalUrl.replace(" ", "%20")
+                    }
+                    list.add(
+                        DesktopMediaItem(
+                            id = "m3u_${list.size}",
+                            title = curTitle,
+                            category = curGroup,
+                            streamUrl = finalUrl,
+                            logoUrl = curLogo,
+                            isLive = isLive
+                        )
+                    )
+                    curTitle = ""
+                    curLogo = null
+                    curGroup = defaultCat
+                }
+            }
+        }
+        return list
+    }
+
+    fun fetchAndParseMediaUrl(rawUrl: String, defaultCat: String, isLive: Boolean): List<DesktopMediaItem> {
+        try {
+            var sanitized = rawUrl.trim()
+            if (sanitized.contains(" ")) {
+                sanitized = sanitized.replace(" ", "%20")
+            }
+            if (sanitized.contains("|")) {
+                sanitized = sanitized.substringBefore("|").trim()
+            }
+            if (!sanitized.startsWith("http://", ignoreCase = true) && !sanitized.startsWith("https://", ignoreCase = true)) {
+                return emptyList()
+            }
+
+            val req = Request.Builder()
+                .url(sanitized)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+                .build()
+
+            val resp = client.newCall(req).execute()
+            if (!resp.isSuccessful) return emptyList()
+
+            val body = resp.body?.string()?.trim() ?: return emptyList()
+            if (body.isEmpty()) return emptyList()
+
+            return if (body.startsWith("{") || body.startsWith("[")) {
+                parseJsonMedia(body, defaultCat, isLive)
+            } else {
+                parseM3uMedia(body, defaultCat, isLive)
+            }
+        } catch (e: Exception) {
+            println("Error fetching URL ($rawUrl): ${e.message}")
+            return emptyList()
+        }
+    }
+
+    fun getFallbackItems(tab: Int): List<DesktopMediaItem> {
+        return when (tab) {
+            0 -> listOf(
+                DesktopMediaItem("fb_ev_1", "Bangladesh vs Sri Lanka (Live Sports)", "ক্রিকেট", "https://tvsen5.aynaott.com/TnMn5kZz8aLm/index.m3u8", isLive = true),
+                DesktopMediaItem("fb_ev_2", "India vs Australia T20 (Sony Ten)", "ক্রিকেট", "https://flussonic.defineatoz.com/Starsports1/tracks-v1a1/mono.m3u8", isLive = true),
+                DesktopMediaItem("fb_ev_3", "Real Madrid vs Barcelona (El Clasico)", "ফুটবল", "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/tracks-v1a1/mono.ts.m3u8", isLive = true),
+                DesktopMediaItem("fb_ev_4", "Manchester City vs Arsenal", "ফুটবল", "https://tvsen5.aynaott.com/willowhd/index.m3u8", isLive = true)
+            )
+            1 -> listOf(
+                DesktopMediaItem("fb_tv_1", "BTV National", "বাংলাদেশ", "https://i.ibb.co.com/k2R3QmKF/Picsart-24-10-21-19-38-26-976.webp", isLive = true),
+                DesktopMediaItem("fb_tv_2", "Somoy TV Live HD", "সংবাদ", "https://box.bbaria.net:8083/Nagorik_TV/video.m3u8", isLive = true),
+                DesktopMediaItem("fb_tv_3", "Jamuna TV HD", "সংবাদ", "http://livetv.akr4m.com:8080/bdtv/restrem/38.m3u8", isLive = true),
+                DesktopMediaItem("fb_tv_4", "T Sports Live HD", "খেলাধুলা", "https://tvsen5.aynaott.com/TnMn5kZz8aLm/index.m3u8", isLive = true),
+                DesktopMediaItem("fb_tv_5", "Channel 24 HD", "বিনোদন", "https://tvsen7.aynaott.com/ssport2hd/index.m3u8", isLive = true)
+            )
+            2 -> listOf(
+                DesktopMediaItem("fb_sp_1", "T Sports HD", "লাইভ স্পোর্টস", "https://tvsen5.aynaott.com/TnMn5kZz8aLm/index.m3u8", isLive = true),
+                DesktopMediaItem("fb_sp_2", "Sony Sports Ten 1 HD", "স্পোর্টস টিভি", "https://flussonic.defineatoz.com/PTV/index.m3u8", isLive = true),
+                DesktopMediaItem("fb_sp_3", "Star Sports 1 HD", "স্পোর্টস টিভি", "https://flussonic.defineatoz.com/Starsports1/tracks-v1a1/mono.m3u8", isLive = true),
+                DesktopMediaItem("fb_sp_4", "Willow Sports Live", "ক্রিকেট", "https://tvsen5.aynaott.com/willowhd/index.m3u8", isLive = true),
+                DesktopMediaItem("fb_sp_5", "A Sports HD", "ক্রিকেট", "https://tvsen6.aynaott.com/zv68oqPDu7MZZwmHhRxt/tracks-v1a1/mono.ts.m3u8", isLive = true)
+            )
+            else -> listOf(
+                DesktopMediaItem("fb_mv_1", "Tufan (তুফান - Full Movie HD)", "বাংলা মুভি", "https://drk6xq0vhn.gpcdn.net/live/euro_sports_hd_abr/index.m3u8", isLive = false),
+                DesktopMediaItem("fb_mv_2", "Jawan (জাওয়ান - HD Bangla Dubbed)", "হিন্দি মুভি", "https://flussonic.defineatoz.com/starsportsselect1/tracks-v1/mono.m3u8", isLive = false),
+                DesktopMediaItem("fb_mv_3", "Animal (HD Remastered)", "অ্যাকশন মুভি", "https://tvsen7.aynaott.com/ssport2hd/index.m3u8", isLive = false)
+            )
+        }
+    }
+
     fun loadContent(tab: Int) {
         isLoading = true
+        selectedCategoryFilter = "সবগুলো"
         coroutineScope.launch(Dispatchers.IO) {
-            val client = OkHttpClient()
-            val items = mutableListOf<DesktopMediaItem>()
+            val collectedItems = mutableListOf<DesktopMediaItem>()
 
-            // Default fallback URLs (Matches official Android App)
-            var liveTvM3u = "https://raw.githubusercontent.com/nfiptv24-max/NAFITV/refs/heads/main/Nafitv24.m3u"
-            var sportsM3u = "https://raw.githubusercontent.com/nfiptv24-max/NAFITV/refs/heads/main/NAFI%20Sports.m3u"
-            var moviesM3u = "https://raw.githubusercontent.com/abusaeeidx/Movie-Playlist-Auto-update/refs/heads/main/Mix_Movies.m3u"
-            var tapmadJson = "https://raw.githubusercontent.com/srhady/tapmad-bd/refs/heads/main/tapmad_bd.json"
+            // Default URLs matching Firebase configuration
+            var liveTvUrls = listOf(
+                "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/Update%20Channel.m3u",
+                "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/HOST%20Channel%20NF.m3u",
+                "https://raw.githubusercontent.com/sm-monirulislam/Toffee-Auto-Update/refs/heads/main/toffee_playlist.m3u",
+                "https://raw.githubusercontent.com/srhady/Hady/refs/heads/main/akash_live.m3u"
+            )
+            var sportsUrls = listOf(
+                "https://raw.githubusercontent.com/sm-monirulislam/SonyLiv_Event_Playlist/refs/heads/main/sonyLiv.m3u",
+                "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/NAFI%20SPORTS.m3u",
+                "https://raw.githubusercontent.com/sm-monirulislam/Tapmad_Auto_Update_Playlist/refs/heads/main/tapmad_sm.m3u",
+                "https://gist.githubusercontent.com/albatr0ssss/3cff7a26be49b1d352c15f615067e7cd/raw/tapmad_bd.m3u",
+                "https://raw.githubusercontent.com/srhady/SonyLiv/refs/heads/main/sonyliv_playlist.m3u",
+                "https://raw.githubusercontent.com/srhady/willow-event/refs/heads/main/live_sports.m3u",
+                "https://raw.githubusercontent.com/srhady/willow-event/refs/heads/main/primevideo_sports.m3u",
+                "https://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/refs/heads/main/Sports_data.m3u",
+                "https://raw.githubusercontent.com/srhady/axsports/refs/heads/main/playlist.m3u"
+            )
+            var moviesUrls = listOf(
+                "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/Kolkata%20serial.json",
+                "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/movies.json",
+                "https://raw.githubusercontent.com/abusaeeidx/Movie-Playlist-Auto-update/refs/heads/main/Mix_Movies.m3u",
+                "https://raw.githubusercontent.com/srhady/join_telegram_chennal-livesportsplay/refs/heads/main/latest_movies.m3u",
+                "https://raw.githubusercontent.com/abusaeeidx/Movie-Playlist-Auto-update/refs/heads/main/Bangla_Movies.m3u"
+            )
+            var liveEventsUrls = listOf(
+                "https://raw.githubusercontent.com/sm-monirulislam/Upcoming-and-Live-Sports-Data/main/Sports_data.json",
+                "https://raw.githubusercontent.com/sm-monirulislam/Tapmad_Auto_Update_Playlist/main/tapmad_data.json",
+                "https://raw.githubusercontent.com/kajju027/Fancode-Events-Json/main/fancode.json"
+            )
 
+            // 1. Fetch Remote Firebase Realtime Database Configuration
             try {
-                // 1. Fetch remote Firebase Realtime Database config
                 val rtdbUrls = listOf(
                     "https://nafitv24-live-default-rtdb.firebaseio.com/app_config.json",
                     "https://nafitv24-default-rtdb.asia-southeast1.firebasedatabase.app/app_config.json"
@@ -78,134 +421,116 @@ fun DesktopNafiTvApp() {
                             val body = configResp.body?.string()
                             if (!body.isNullOrBlank() && body.startsWith("{")) {
                                 val obj = JSONObject(body)
-                                if (obj.has("liveTvM3uUrl") && obj.getString("liveTvM3uUrl").isNotBlank()) {
-                                    liveTvM3u = obj.getString("liveTvM3uUrl")
+                                if (obj.has("liveTvM3uUrl")) {
+                                    val extracted = extractUrls(obj.getString("liveTvM3uUrl"))
+                                    if (extracted.isNotEmpty()) liveTvUrls = extracted
                                 }
-                                if (obj.has("sportsM3uUrl") && obj.getString("sportsM3uUrl").isNotBlank()) {
-                                    sportsM3u = obj.getString("sportsM3uUrl")
+                                if (obj.has("sportsM3uUrl")) {
+                                    val extracted = extractUrls(obj.getString("sportsM3uUrl"))
+                                    if (extracted.isNotEmpty()) sportsUrls = extracted
                                 }
-                                if (obj.has("moviesM3uUrl") && obj.getString("moviesM3uUrl").isNotBlank()) {
-                                    moviesM3u = obj.getString("moviesM3uUrl")
+                                if (obj.has("moviesM3uUrl")) {
+                                    val extracted = extractUrls(obj.getString("moviesM3uUrl"))
+                                    if (extracted.isNotEmpty()) moviesUrls = extracted
                                 }
-                                if (obj.has("tapmadJsonUrl") && obj.getString("tapmadJsonUrl").isNotBlank()) {
-                                    tapmadJson = obj.getString("tapmadJsonUrl")
+                                if (obj.has("tapmadJsonUrl")) {
+                                    val extracted = extractUrls(obj.getString("tapmadJsonUrl"))
+                                    if (extracted.isNotEmpty()) liveEventsUrls = extracted
                                 }
                                 break
                             }
                         }
                     } catch (_: Exception) {}
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
-                // 2. Fetch data according to the selected tab
-                if (tab == 0) {
-                    // LIVE EVENTS - Multi-JSON Support
-                    val jsonUrls = tapmadJson.split("\n", ",").map { it.trim() }.filter { it.isNotBlank() }
-                    for (jUrl in jsonUrls) {
-                        try {
-                            val jsonReq = Request.Builder()
-                                .url(jUrl)
-                                .header("User-Agent", "NAFITV24-Desktop/2.6.8")
-                                .build()
-                            val jsonResp = client.newCall(jsonReq).execute()
-                            if (jsonResp.isSuccessful) {
-                                val jsonStr = jsonResp.body?.string()?.trim() ?: ""
-                                val matchesArray = if (jsonStr.startsWith("[")) {
-                                    JSONArray(jsonStr)
-                                } else if (jsonStr.startsWith("{")) {
-                                    val root = JSONObject(jsonStr)
-                                    root.optJSONArray("Matches")
-                                        ?: root.optJSONArray("matches")
-                                        ?: root.optJSONArray("events")
-                                        ?: root.optJSONArray("data")
-                                        ?: JSONArray()
-                                } else {
-                                    JSONArray()
-                                }
+            // 2. Tab Specific Remote Data Fetching
+            when (tab) {
+                0 -> {
+                    // LIVE EVENTS: Fetch all event URLs in parallel
+                    val deferredEvents = liveEventsUrls.map { evUrl ->
+                        async { fetchAndParseMediaUrl(evUrl, defaultCat = "লাইভ ম্যাচ", isLive = true) }
+                    }
+                    val fetched = deferredEvents.awaitAll().flatten()
+                    collectedItems.addAll(fetched)
 
-                                for (i in 0 until matchesArray.length()) {
-                                    val obj = matchesArray.getJSONObject(i)
-                                    val vName = obj.optString("VideoName", obj.optString("title", obj.optString("name", "Match $i")))
-                                    val sUrl = obj.optString("stream_url", obj.optString("streamUrl", obj.optString("url", "")))
-                                    val cat = obj.optString("CategoryName", obj.optString("category", "লাইভ ম্যাচ"))
-                                    val thumb = obj.optString("ThumbnailStandard", obj.optString("logo", obj.optString("image", null)))
-                                    val status = obj.optString("Status", "Live")
+                    // Also fetch Firebase RTDB /matches.json directly for real-time matches
+                    try {
+                        val matchesReq = Request.Builder()
+                            .url("https://nafitv24-live-default-rtdb.firebaseio.com/matches.json")
+                            .build()
+                        val matchesResp = client.newCall(matchesReq).execute()
+                        if (matchesResp.isSuccessful) {
+                            val mBody = matchesResp.body?.string()?.trim() ?: ""
+                            if (mBody.startsWith("{")) {
+                                val mObj = JSONObject(mBody)
+                                val keys = mObj.keys()
+                                while (keys.hasNext()) {
+                                    val key = keys.next()
+                                    val item = mObj.optJSONObject(key) ?: continue
+                                    val name = item.optString("name", item.optString("title", "")).trim()
+                                    val stream = item.optString("streamUrl", item.optString("backupUrl", "")).trim()
+                                    val cat = item.optString("category", "ক্রিকেট").trim().ifBlank { "ক্রিকেট" }
+                                    val logo = item.optString("logoUrl", item.optString("logo", item.optString("poster", ""))).trim().takeIf { it.isNotBlank() }
+                                    val isLiveNow = item.optBoolean("isLive", true)
 
-                                    if (sUrl.isNotBlank()) {
-                                        items.add(
+                                    if (name.isNotBlank() && (stream.startsWith("http://") || stream.startsWith("https://"))) {
+                                        collectedItems.add(
+                                            0,
                                             DesktopMediaItem(
-                                                id = "event_${items.size}_$i",
-                                                title = vName,
+                                                id = "rtdb_match_$key",
+                                                title = name,
                                                 category = cat,
-                                                streamUrl = sUrl,
-                                                logoUrl = thumb,
-                                                isLive = status.contains("live", ignoreCase = true)
+                                                streamUrl = stream,
+                                                logoUrl = logo,
+                                                isLive = isLiveNow
                                             )
                                         )
                                     }
                                 }
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
                         }
-                    }
-                } else {
-                    // M3U PLAYLISTS: Live TV, Sports Channels, or Movies
-                    val targetM3u = when (tab) {
-                        1 -> liveTvM3u
-                        2 -> sportsM3u
-                        else -> moviesM3u
-                    }
-
-                    val m3uReq = Request.Builder()
-                        .url(targetM3u.trim())
-                        .header("User-Agent", "NAFITV24-Desktop/2.6.8")
-                        .build()
-                    val m3uResp = client.newCall(m3uReq).execute()
-                    if (m3uResp.isSuccessful) {
-                        val lines = m3uResp.body?.string()?.lines() ?: emptyList()
-                        var curTitle = ""
-                        var curLogo: String? = null
-                        var curGroup = when (tab) {
-                            1 -> "লাইভ টিভি"
-                            2 -> "স্পোর্টস টিভি"
-                            else -> "মুভিজ"
-                        }
-
-                        for (line in lines) {
-                            val trimmed = line.trim()
-                            if (trimmed.startsWith("#EXTINF:")) {
-                                curTitle = trimmed.substringAfterLast(",").trim()
-                                if (trimmed.contains("tvg-logo=\"")) {
-                                    curLogo = trimmed.substringAfter("tvg-logo=\"").substringBefore("\"")
-                                }
-                                if (trimmed.contains("group-title=\"")) {
-                                    curGroup = trimmed.substringAfter("group-title=\"").substringBefore("\"")
-                                }
-                            } else if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                                if (curTitle.isNotBlank()) {
-                                    items.add(
-                                        DesktopMediaItem(
-                                            id = "ch_${items.size}",
-                                            title = curTitle,
-                                            category = curGroup,
-                                            streamUrl = trimmed,
-                                            logoUrl = curLogo,
-                                            isLive = tab != 3
-                                        )
-                                    )
-                                    curTitle = ""
-                                    curLogo = null
-                                }
-                            }
-                        }
-                    }
+                    } catch (_: Exception) {}
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+                1 -> {
+                    // LIVE TV: Fetch all Live TV URLs in parallel
+                    val deferredTv = liveTvUrls.map { tvUrl ->
+                        async { fetchAndParseMediaUrl(tvUrl, defaultCat = "লাইভ টিভি", isLive = true) }
+                    }
+                    collectedItems.addAll(deferredTv.awaitAll().flatten())
+                }
+                2 -> {
+                    // SPORTS TV: Fetch all Sports playlist URLs in parallel
+                    val deferredSports = sportsUrls.map { spUrl ->
+                        async { fetchAndParseMediaUrl(spUrl, defaultCat = "স্পোর্টস টিভি", isLive = true) }
+                    }
+                    collectedItems.addAll(deferredSports.awaitAll().flatten())
+                }
+                3 -> {
+                    // MOVIES & SERIES: Fetch all Movie catalogs in parallel
+                    val deferredMovies = moviesUrls.map { mvUrl ->
+                        async { fetchAndParseMediaUrl(mvUrl, defaultCat = "মুভিজ", isLive = false) }
+                    }
+                    collectedItems.addAll(deferredMovies.awaitAll().flatten())
+                }
+            }
+
+            // 3. Fallback Safety Guarantee: If remote returned 0 items, use built-in channels
+            if (collectedItems.isEmpty()) {
+                collectedItems.addAll(getFallbackItems(tab))
+            }
+
+            // 4. De-duplicate by title & streamUrl
+            val seen = HashSet<String>()
+            val distinctList = collectedItems.filter { item ->
+                val signature = "${item.title.trim().lowercase()}_${item.streamUrl.trim()}"
+                if (seen.contains(signature)) false else { seen.add(signature); true }
             }
 
             withContext(Dispatchers.Main) {
-                mediaList = items
+                mediaList = distinctList
                 isLoading = false
             }
         }
@@ -215,11 +540,23 @@ fun DesktopNafiTvApp() {
         loadContent(selectedTab)
     }
 
-    // Filtered by Search
-    val filteredList = remember(mediaList, searchQuery) {
-        if (searchQuery.isBlank()) mediaList
-        else mediaList.filter {
-            it.title.contains(searchQuery, ignoreCase = true) || it.category.contains(searchQuery, ignoreCase = true)
+    // Extract unique categories for category filtering tabs
+    val categoryList = remember(mediaList) {
+        val cats = mediaList.map { it.category }.distinct().filter { it.isNotBlank() }
+        listOf("সবগুলো") + cats
+    }
+
+    // Filtered by Search & Category
+    val filteredList = remember(mediaList, searchQuery, selectedCategoryFilter) {
+        mediaList.filter { item ->
+            val matchQuery = searchQuery.isBlank() ||
+                    item.title.contains(searchQuery, ignoreCase = true) ||
+                    item.category.contains(searchQuery, ignoreCase = true)
+
+            val matchCategory = selectedCategoryFilter == "সবগুলো" ||
+                    item.category.equals(selectedCategoryFilter, ignoreCase = true)
+
+            matchQuery && matchCategory
         }
     }
 
@@ -248,7 +585,7 @@ fun DesktopNafiTvApp() {
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("NAFI TV 24", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text("PC Edition v2.6.8", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                        Text("PC Edition v3.1.5", color = Color(0xFF94A3B8), fontSize = 11.sp)
                     }
                 }
             ) {
@@ -321,7 +658,30 @@ fun DesktopNafiTvApp() {
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Category Filter Chips
+                if (categoryList.size > 2) {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(categoryList) { cat ->
+                            FilterChip(
+                                selected = selectedCategoryFilter == cat,
+                                onClick = { selectedCategoryFilter = cat },
+                                label = { Text(cat, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF00E5FF),
+                                    selectedLabelColor = Color.Black,
+                                    containerColor = Color(0xFF1E293B),
+                                    labelColor = Color(0xFFCBD5E1)
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        }
+                    }
+                }
 
                 // Active Video Player Area (When an item is clicked)
                 if (currentPlayingItem != null) {
@@ -374,7 +734,7 @@ fun DesktopNafiTvApp() {
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.OpenInNew, contentDescription = "Open Stream", tint = Color(0xFF00E5FF))
+                                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = "Open Stream", tint = Color(0xFF00E5FF))
                                     }
 
                                     Spacer(modifier = Modifier.width(4.dp))
@@ -394,25 +754,37 @@ fun DesktopNafiTvApp() {
                 // Grid Content
                 if (isLoading) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Color(0xFF00E5FF))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = Color(0xFF00E5FF))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text("লাইভ চ্যানেল ও কনটেন্ট লোড হচ্ছে...", color = Color(0xFF94A3B8), fontSize = 13.sp)
+                        }
                     }
                 } else if (filteredList.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("কোনো কনটেন্ট পাওয়া যায়নি", color = Color(0xFF94A3B8))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Rounded.SearchOff, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(48.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("কোনো কনটেন্ট পাওয়া যায়নি", color = Color(0xFF94A3B8), fontSize = 14.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { loadContent(selectedTab) }) {
+                                Text("পুনরায় লোড করুন")
+                            }
+                        }
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 180.dp),
+                        columns = GridCells.Adaptive(minSize = 190.dp),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(filteredList) { item ->
+                        items(filteredList, key = { it.id }) { item ->
                             Card(
                                 onClick = { currentPlayingItem = item },
                                 shape = RoundedCornerShape(14.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                                modifier = Modifier.fillMaxWidth().height(160.dp)
+                                modifier = Modifier.fillMaxWidth().height(165.dp)
                             ) {
                                 Column(
                                     modifier = Modifier.fillMaxSize().padding(12.dp),
@@ -436,7 +808,15 @@ fun DesktopNafiTvApp() {
                                             )
                                         }
 
-                                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFF0F172A),
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(18.dp))
+                                            }
+                                        }
                                     }
 
                                     Spacer(modifier = Modifier.weight(1f))
@@ -447,6 +827,16 @@ fun DesktopNafiTvApp() {
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 13.sp,
                                         maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Text(
+                                        text = item.category,
+                                        color = Color(0xFF64748B),
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
