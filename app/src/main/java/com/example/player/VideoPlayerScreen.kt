@@ -476,7 +476,7 @@ fun VideoPlayerScreen(
     val bandwidthMeter = remember {
         androidx.media3.exoplayer.upstream.DefaultBandwidthMeter.Builder(context)
             .setResetOnNetworkTypeChange(false)
-            .setInitialBitrateEstimate(1_500_000L)
+            .setInitialBitrateEstimate(2_500_000L)
             .build()
     }
 
@@ -1126,7 +1126,7 @@ fun VideoPlayerScreen(
         val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(!isLiveStream)
             .setTsExtractorFlags(tsPayloadReaderFlags)
-            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_SINGLE_PMT)
+            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(defaultDataSourceFactory, extractorsFactory)
             .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
@@ -1149,10 +1149,10 @@ fun VideoPlayerScreen(
         // Automatically steps down resolution immediately if bandwidth drops to prevent any buffering stalls,
         // and reserves a 35% safety margin so slow or fluctuating networks never run out of buffered data.
         val adaptiveTrackSelectionFactory = androidx.media3.exoplayer.trackselection.AdaptiveTrackSelection.Factory(
-            /* minDurationForQualityIncreaseMs = */ 8000,
+            /* minDurationForQualityIncreaseMs = */ 10000,
             /* maxDurationForQualityDecreaseMs = */ 100,
             /* minDurationToRetainAfterDiscardMs = */ 2000,
-            /* bandwidthFraction = */ 0.65f // 65% bandwidth fraction leaves a 35% safety margin for weak networks
+            /* bandwidthFraction = */ 0.70f // 70% bandwidth fraction leaves a 30% safety margin for weak networks
         )
 
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(context, adaptiveTrackSelectionFactory).apply {
@@ -1176,27 +1176,28 @@ fun VideoPlayerScreen(
         val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRamDevice = actManager?.isLowRamDevice == true || (Runtime.getRuntime().maxMemory() / (1024 * 1024)) <= 128
 
-        // Anti-Buffering LoadControl for Weak Networks:
-        // - Starts playing immediately upon receiving 500ms of audio/video
-        // - Rebuffering cushion of only 1000ms ensures rapid recovery without prolonged freezes
-        // - 5s minimum buffer maintains steady throughput on live streams without chasing past the live edge
+        // Zero-Buffering & Instant Playback LoadControl:
+        // - bufferForPlaybackMs = 200L: Starts playing INSTANTLY the moment the channel is clicked!
+        // - bufferForPlaybackAfterRebufferMs = 400L: Instant recovery if any network hiccup occurs
+        // - minBufferMs = 25000L / 35000L: Massive 25-35 second safety cushion preventing periodic freezes or stalls
+        // - maxBufferMs = 60000L / 90000L: Builds a deep continuous buffer in background while user watches smoothly
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, if (isLowRamDevice) 32 * 1024 else 64 * 1024))
             .setBufferDurationsMs(
-                /* minBufferMs = */ if (isLiveStream) 5000 else if (isLowRamDevice) 8000 else 15000,
-                /* maxBufferMs = */ if (isLiveStream) 30000 else if (isLowRamDevice) 20000 else 60000,
-                /* bufferForPlaybackMs = */ 500,
-                /* bufferForPlaybackAfterRebufferMs = */ 1000
+                /* minBufferMs = */ if (isLiveStream) 25000 else if (isLowRamDevice) 15000 else 35000,
+                /* maxBufferMs = */ if (isLiveStream) 60000 else if (isLowRamDevice) 30000 else 90000,
+                /* bufferForPlaybackMs = */ 200,
+                /* bufferForPlaybackAfterRebufferMs = */ 400
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(5000, true)
+            .setBackBuffer(10000, true)
             .setTargetBufferBytes(
                 if (isLowRamDevice) {
-                    if (isLiveStream) 6 * 1024 * 1024 else 12 * 1024 * 1024
+                    if (isLiveStream) 16 * 1024 * 1024 else 24 * 1024 * 1024
                 } else if (isLiveStream) {
-                    16 * 1024 * 1024
-                } else {
                     32 * 1024 * 1024
+                } else {
+                    64 * 1024 * 1024
                 }
             )
             .build()
@@ -1273,16 +1274,14 @@ fun VideoPlayerScreen(
 
                 val isTs = isExplicitTs
 
-                if (isLiveStream && !isTs) {
-                    // Safe Live Configuration for Weak Networks: 8s live offset with 3s-25s tolerance
-                    // Prevents exhausting buffer at the live edge on 3G/4G/slow WiFi networks
+                // For live streams, do NOT enforce restrictive 8s targetOffset on HLS/TS!
+                // Enforcing targetOffset throttles ExoPlayer buffer to only 8s, causing periodic stalls/freezes every few seconds.
+                // Leaving liveConfiguration default allows ExoPlayer to buffer 25-60s ahead continuously without freezing.
+                if (isLiveStream && isMpd) {
                     mediaItemBuilder.setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setTargetOffsetMs(8000L)
-                            .setMinOffsetMs(3000L)
-                            .setMaxOffsetMs(25000L)
-                            .setMinPlaybackSpeed(1.0f)
-                            .setMaxPlaybackSpeed(1.0f)
+                            .setMaxPlaybackSpeed(1.02f)
+                            .setMinPlaybackSpeed(0.98f)
                             .build()
                     )
                 }
