@@ -2636,12 +2636,12 @@ fun VideoPlayerScreen(
                 )
             }
 
-            // Subtle persistent watermark at bottom-right (shows once channel has started playing)
+            // Subtle persistent watermark at top-right (shows once channel has started playing)
             if (hasStartedPlaying) {
                 PlayerWatermark(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 20.dp, bottom = if (showControls) 112.dp else 20.dp),
+                        .align(Alignment.TopEnd)
+                        .padding(end = 20.dp, top = if (showControls) 64.dp else 18.dp),
                     fontSize = 11.sp
                 )
             }
@@ -3406,12 +3406,12 @@ fun VideoPlayerScreen(
                     }
                 }
 
-                // Subtle persistent watermark at bottom-right in portrait embedded player
+                // Subtle persistent watermark at top-right in portrait embedded player
                 if (hasStartedPlaying) {
                     PlayerWatermark(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 10.dp, bottom = if (showControls) 54.dp else 10.dp),
+                            .align(Alignment.TopEnd)
+                            .padding(end = 10.dp, top = 38.dp),
                         fontSize = 9.sp
                     )
                 }

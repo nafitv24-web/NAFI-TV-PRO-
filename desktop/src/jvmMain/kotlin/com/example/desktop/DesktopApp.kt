@@ -748,11 +748,11 @@ fun DesktopNafiTvApp() {
                                 }
                             }
 
-                            // Subtle persistent watermark at bottom-right of Desktop player
+                            // Subtle persistent watermark at top-right of Desktop player
                             Box(
                                 modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(end = 16.dp, bottom = 16.dp)
+                                    .align(Alignment.TopEnd)
+                                    .padding(end = 16.dp, top = 46.dp)
                                     .background(Color.Black.copy(alpha = 0.20f), RoundedCornerShape(4.dp))
                                     .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
