@@ -747,6 +747,24 @@ fun DesktopNafiTvApp() {
                                     }
                                 }
                             }
+
+                            // Subtle persistent watermark at bottom-right of Desktop player
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(end = 16.dp, bottom = 16.dp)
+                                    .background(Color.Black.copy(alpha = 0.20f), RoundedCornerShape(4.dp))
+                                    .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "NAFI TV PRO",
+                                    color = Color.White.copy(alpha = 0.40f),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 1.2.sp
+                                )
+                            }
                         }
                     }
                 }

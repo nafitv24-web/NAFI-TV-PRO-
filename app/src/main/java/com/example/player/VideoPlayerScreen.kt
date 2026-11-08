@@ -2635,6 +2635,16 @@ fun VideoPlayerScreen(
                     modifier = Modifier.align(Alignment.CenterEnd)
                 )
             }
+
+            // Subtle persistent watermark at bottom-right (shows once channel has started playing)
+            if (hasStartedPlaying) {
+                PlayerWatermark(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 20.dp, bottom = if (showControls) 112.dp else 20.dp),
+                    fontSize = 11.sp
+                )
+            }
         }
     } else {
         // PORTRAIT EMBEDDED PLAYER VIEW (Screenshot 4 layout)
@@ -3394,6 +3404,16 @@ fun VideoPlayerScreen(
                             }
                         }
                     }
+                }
+
+                // Subtle persistent watermark at bottom-right in portrait embedded player
+                if (hasStartedPlaying) {
+                    PlayerWatermark(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 10.dp, bottom = if (showControls) 54.dp else 10.dp),
+                        fontSize = 9.sp
+                    )
                 }
             }
 
@@ -6159,6 +6179,39 @@ fun TvNumberDialOverlay(
                 )
             }
         }
+    }
+}
+
+/**
+ * Subtle persistent watermark displayed at the bottom-right of the video player.
+ * Semi-transparent and elegant so it never obstructs or disturbs the viewer.
+ */
+@Composable
+fun PlayerWatermark(
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 11.sp
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(4.dp),
+        color = Color.Black.copy(alpha = 0.20f),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Text(
+            text = "NAFI TV PRO",
+            color = Color.White.copy(alpha = 0.40f),
+            fontSize = fontSize,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.2.sp,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = androidx.compose.ui.text.TextStyle(
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color.Black.copy(alpha = 0.7f),
+                    offset = androidx.compose.ui.geometry.Offset(1f, 1f),
+                    blurRadius = 2f
+                )
+            )
+        )
     }
 }
 
