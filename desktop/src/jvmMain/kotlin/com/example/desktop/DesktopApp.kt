@@ -748,23 +748,17 @@ fun DesktopNafiTvApp() {
                                 }
                             }
 
-                            // Subtle persistent watermark at top-right of Desktop player
-                            Box(
+                            // Persistent watermark at top-right of Desktop player (No background, bright & vivid)
+                            Image(
+                                painter = androidx.compose.ui.res.painterResource("nafi_watermark_logo.png"),
+                                contentDescription = "NAFI TV PRO Logo",
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
                                     .padding(end = 16.dp, top = 46.dp)
-                                    .background(Color.Black.copy(alpha = 0.20f), RoundedCornerShape(4.dp))
-                                    .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "NAFI TV PRO",
-                                    color = Color.White.copy(alpha = 0.40f),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    letterSpacing = 1.2.sp
-                                )
-                            }
+                                    .height(36.dp),
+                                alpha = 0.90f,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                            )
                         }
                     }
                 }

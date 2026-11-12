@@ -6183,36 +6183,25 @@ fun TvNumberDialOverlay(
 }
 
 /**
- * Subtle persistent watermark displayed at the bottom-right of the video player.
- * Semi-transparent and elegant so it never obstructs or disturbs the viewer.
+ * Persistent watermark displayed at the top-right of the video player.
+ * Displays the exact official "NAFI TV PRO" banner logo with NO background.
+ * Bright, vivid, and pure transparent overlay.
  */
 @Composable
 fun PlayerWatermark(
     modifier: Modifier = Modifier,
-    fontSize: androidx.compose.ui.unit.TextUnit = 11.sp
+    fontSize: androidx.compose.ui.unit.TextUnit = 11.sp,
+    isCompact: Boolean = (fontSize < 11.sp)
 ) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(4.dp),
-        color = Color.Black.copy(alpha = 0.20f),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.12f))
-    ) {
-        Text(
-            text = "NAFI TV PRO",
-            color = Color.White.copy(alpha = 0.40f),
-            fontSize = fontSize,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            style = androidx.compose.ui.text.TextStyle(
-                shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black.copy(alpha = 0.7f),
-                    offset = androidx.compose.ui.geometry.Offset(1f, 1f),
-                    blurRadius = 2f
-                )
-            )
-        )
-    }
+    Image(
+        painter = painterResource(id = R.drawable.nafi_watermark_logo),
+        contentDescription = "NAFI TV PRO Logo",
+        modifier = modifier
+            .height(if (isCompact) 30.dp else 40.dp),
+        alpha = 0.90f,
+        contentScale = ContentScale.Fit
+    )
 }
+
 
 

@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "public": true,
+  "routes": [
+    {
+      "src": "/api/channels",
+      "dest": "/channels.json"
+    },
+    {
+      "src": "/playlist.m3u",
+      "dest": "/playlist.m3u"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}

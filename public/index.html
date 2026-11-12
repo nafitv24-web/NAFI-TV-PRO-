@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>NAFI TV Pro - লাইভ টিভি ও স্ট্রিমিং (Android, PC & iPhone)</title>
+
+  <!-- iOS / Apple Mobile Web App Settings -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NAFI TV Pro">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/icon-192.png">
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#020617">
+
+  <!-- HLS.js for non-Safari browsers (Safari uses native HLS) -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body {
+      background-color: #020617;
+      color: #F8FAFC;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding-bottom: 40px;
+      overflow-x: hidden;
+    }
+
+    /* iOS PWA Safe Area Support */
+    header {
+      padding-top: env(safe-area-inset-top, 12px);
+    }
+
+    /* iOS Installation Banner */
+    .ios-pwa-banner {
+      background: linear-gradient(135deg, #0284C7, #0369A1);
+      color: #FFFFFF;
+      padding: 10px 14px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255,255,255,0.2);
+    }
+    .ios-pwa-banner-text {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+    .ios-pwa-banner button {
+      background: rgba(0,0,0,0.3);
+      border: none;
+      color: #fff;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    /* App Header */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #0B1120;
+      border-bottom: 1px solid #1E293B;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: 1px solid #00E5FF;
+      object-fit: cover;
+    }
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(90deg, #FFFFFF, #00E5FF);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .header-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-action {
+      background: #1E293B;
+      border: 1px solid #334155;
+      color: #38BDF8;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 9px;
+      border-radius: 8px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-action.highlight {
+      background: linear-gradient(135deg, #0284C7, #00E5FF);
+      color: #020617;
+      border: none;
+      font-weight: 800;
+    }
+    .btn-action:hover {
+      opacity: 0.9;
+    }
+
+    /* Video Player Container */
+    .player-section {
+      width: 100%;
+      background: #000;
+      position: sticky;
+      top: 61px;
+      z-index: 90;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.8);
+    }
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+
+    /* Top-Right Watermark (NAFI TV PRO) */
+    .player-watermark {
+      position: absolute;
+      top: 14px;
+      right: 16px;
+      z-index: 20;
+      background: rgba(0, 0, 0, 0.22);
+      border: 0.5px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: rgba(255, 255, 255, 0.42);
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+
+    /* Player Status Bar */
+    .player-status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: #0F172A;
+      border-bottom: 1px solid #1E293B;
+    }
+    .now-playing-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #FFFFFF;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 60%;
+    }
+    .server-list {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+    }
+    .server-chip {
+      background: #1E293B;
+      color: #94A3B8;
+      border: 1px solid #334155;
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .server-chip.active {
+      background: #00E5FF;
+      color: #020617;
+      font-weight: 800;
+      border-color: #00E5FF;
+    }
+
+    /* Navigation Tabs */
+    .tab-bar {
+      display: flex;
+      background: #0B1120;
+      border-bottom: 1px solid #1E293B;
+      padding: 4px 8px;
+    }
+    .tab-item {
+      flex: 1;
+      text-align: center;
+      padding: 10px 4px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #94A3B8;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tab-item.active {
+      color: #00E5FF;
+      background: #1E293B;
+    }
+
+    /* Search & Categories */
+    .filter-bar {
+      padding: 10px 14px;
+      background: #020617;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .search-input {
+      width: 100%;
+      background: #0F172A;
+      border: 1px solid #334155;
+      color: #FFF;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      outline: none;
+    }
+    .search-input:focus {
+      border-color: #00E5FF;
+    }
+    .category-scroll {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+    .category-scroll::-webkit-scrollbar {
+      display: none;
+    }
+    .cat-pill {
+      background: #1E293B;
+      color: #94A3B8;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      border: 1px solid transparent;
+    }
+    .cat-pill.active {
+      background: rgba(0, 229, 255, 0.15);
+      color: #00E5FF;
+      border-color: #00E5FF;
+    }
+
+    /* 3-Column Channel Grid */
+    .channel-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 12px 14px;
+    }
+    @media (min-width: 600px) {
+      .channel-grid {
+        grid-template-columns: repeat(4, 1fr);
+      }
+    }
+    @media (min-width: 900px) {
+      .channel-grid {
+        grid-template-columns: repeat(6, 1fr);
+      }
+    }
+
+    /* Compact Channel Card */
+    .channel-card {
+      background: #0F172A;
+      border: 1px solid #1E293B;
+      border-radius: 12px;
+      height: 106px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 6px;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.2s;
+    }
+    .channel-card:active {
+      transform: scale(0.96);
+      border-color: #00E5FF;
+    }
+    .channel-card.playing {
+      border-color: #00E5FF;
+      background: rgba(0, 229, 255, 0.08);
+    }
+    .channel-logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      object-fit: contain;
+      background: #1E293B;
+      margin-bottom: 6px;
+    }
+    .channel-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: #E2E8F0;
+      text-align: center;
+      line-height: 1.2;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .live-dot {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10B981;
+      box-shadow: 0 0 6px #10B981;
+    }
+
+    /* Install Hub Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      backdrop-filter: blur(8px);
+    }
+    .modal-box {
+      background: #0F172A;
+      border: 1px solid #38BDF8;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 480px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0, 229, 255, 0.2);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      border-bottom: 1px solid #1E293B;
+      padding-bottom: 12px;
+    }
+    .modal-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: #00E5FF;
+    }
+    .modal-close {
+      background: #1E293B;
+      border: none;
+      color: #FFF;
+      font-size: 16px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .platform-card {
+      background: #1E293B;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .platform-card.ios {
+      border-color: #00E5FF;
+    }
+    .platform-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .platform-desc {
+      font-size: 12px;
+      color: #94A3B8;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .btn-install {
+      background: #0284C7;
+      color: #FFF;
+      text-decoration: none;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: none;
+      cursor: pointer;
+    }
+    .btn-install.apple {
+      background: linear-gradient(135deg, #00E5FF, #0284C7);
+      color: #020617;
+      font-weight: 800;
+    }
+    .btn-install.android {
+      background: #10B981;
+    }
+    .btn-install.pc {
+      background: #6366F1;
+    }
+    .btn-install.secondary {
+      background: #334155;
+      color: #E2E8F0;
+    }
+
+    /* Toast Notification */
+    .toast-msg {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #00E5FF;
+      color: #FFF;
+      padding: 10px 18px;
+      border-radius: 25px;
+      font-size: 13px;
+      z-index: 500;
+      display: none;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- iOS Safari PWA Install Banner -->
+  <div id="iosBanner" class="ios-pwa-banner" style="display: none;">
+    <div class="ios-pwa-banner-text">
+      <span>📱 <b>আইফোনে ইনস্টল:</b> Safari শেয়ার বাটন (<b>📤</b>) ট্যাপ করে <b>'Add to Home Screen'</b> নির্বাচন করুন।</span>
+    </div>
+    <div style="display: flex; gap: 6px;">
+      <button onclick="openInstallModal('ios')" style="background: #00E5FF; color: #020617; font-weight: 700;">ইনস্টল</button>
+      <button onclick="dismissIosBanner()">✕</button>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand-box" onclick="openInstallModal()">
+      <img src="/icon-192.png" alt="Logo" class="brand-logo" onerror="this.src='/apple-touch-icon.png'">
+      <div class="brand-title">NAFI TV PRO</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-action highlight" onclick="openInstallModal()">📲 ইনস্টল করুন</button>
+      <a href="/playlist.m3u" class="btn-action" title="iOS VLC ও IPTV অ্যাপ লিংক" onclick="copyM3uLink(event)">📋 M3U</a>
+      <a href="/app-debug.apk" class="btn-action" download title="অ্যান্ড্রয়েড অ্যাপ">🤖 APK</a>
+      <a href="/nafitv-desktop.jar" class="btn-action" download title="কম্পিউটার অ্যাপ">💻 PC</a>
+    </div>
+  </header>
+
+  <!-- Video Player Section -->
+  <div class="player-section">
+    <div class="video-wrapper">
+      <video id="videoPlayer" controls autoplay playsinline webkit-playsinline></video>
+      <!-- Top-Right Watermark -->
+      <div id="watermark" class="player-watermark">NAFI TV PRO</div>
+    </div>
+    <div class="player-status-bar">
+      <div id="nowPlayingTitle" class="now-playing-title">চ্যানেল নির্বাচন করুন</div>
+      <div id="serverList" class="server-list"></div>
+    </div>
+  </div>
+
+  <!-- Main Tabs -->
+  <div class="tab-bar">
+    <div class="tab-item active" onclick="switchTab('livetv')">📺 লাইভ টিভি</div>
+    <div class="tab-item" onclick="switchTab('sports')">🏆 খেলাধুলা</div>
+    <div class="tab-item" onclick="switchTab('movies')">🎬 মুভি ও সিরিজ</div>
+    <div class="tab-item" onclick="switchTab('playlists')">📁 প্লেলিস্ট</div>
+  </div>
+
+  <!-- Search & Category Filters -->
+  <div class="filter-bar">
+    <input type="text" id="searchInput" class="search-input" placeholder="🔍 চ্যানেল বা মুভি খুঁজুন..." oninput="onSearchChange()">
+    <div id="categoryScroll" class="category-scroll"></div>
+  </div>
+
+  <!-- 3-Column Channel Grid -->
+  <div id="channelGrid" class="channel-grid"></div>
+
+  <!-- Universal Install Hub Modal (iPhone, Android, Computer) -->
+  <div id="installModal" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">📲 NAFI TV Pro ইনস্টলেশন হাব</div>
+        <button class="modal-close" onclick="closeInstallModal()">✕</button>
+      </div>
+
+      <!-- 1. Apple iPhone / iPad -->
+      <div class="platform-card ios">
+        <div class="platform-title" style="color: #00E5FF;">
+          <span>🍎 আইফোন ও আইপ্যাড (Apple iOS / iPhone)</span>
+        </div>
+        <div class="platform-desc">
+          আইফোনে কোনো App Store জটিলতা ছাড়াই সরাসরি অ্যাপ হিসেবে চালানোর উপায়:
+        </div>
+        <div class="btn-group">
+          <a href="/nafitv.mobileconfig" class="btn-install apple" download="NAFI_TV_Pro.mobileconfig" onclick="showIosConfigGuide()">
+            📥 সরাসরি আইফোন অ্যাপ ইনস্টল (iOS Profile)
+          </a>
+          <button class="btn-install secondary" onclick="showPwaGuide()">
+            🌐 Safari হোম স্ক্রিনে যোগ করুন (Add to Home Screen)
+          </button>
+          <a href="/nafitv.ipa" class="btn-install secondary" download="NAFI_TV_Pro.ipa">
+            📦 iOS IPA ফাইল ডাউনলোড (AltStore / Scarlet)
+          </a>
+          <button class="btn-install secondary" onclick="copyM3uLink(event)">
+            📋 VLC ও IPTV Smarters লিংক কপি করুন
+          </button>
+        </div>
+      </div>
+
+      <!-- 2. Android Mobile & TV -->
+      <div class="platform-card">
+        <div class="platform-title" style="color: #10B981;">
+          <span>🤖 অ্যান্ড্রয়েড ফোন ও টিভি (Android)</span>
+        </div>
+        <div class="platform-desc">
+          অ্যান্ড্রয়েড ফোন, ট্যাবলেট ও অ্যান্ড্রয়েড টিভির জন্য ফুল ভার্সন APK:
+        </div>
+        <div class="btn-group">
+          <a href="/app-debug.apk" class="btn-install android" download="NAFI_TV_Pro.apk">
+            📥 অ্যান্ড্রয়েড APK ডাউনলোড (v2.0)
+          </a>
+        </div>
+      </div>
+
+      <!-- 3. PC / Computer / Laptop -->
+      <div class="platform-card">
+        <div class="platform-title" style="color: #818CF8;">
+          <span>💻 কম্পিউটার ও ল্যাপটপ (Windows / Mac / Linux)</span>
+        </div>
+        <div class="platform-desc">
+          যেকোনো কম্পিউটার বা ল্যাপটপে সরাসরি ডাবল ক্লিক করে চালানোর অ্যাপ:
+        </div>
+        <div class="btn-group">
+          <a href="/nafitv-desktop.jar" class="btn-install pc" download="NAFI_TV_Desktop.jar">
+            💻 কম্পিউটার ডেস্কটপ অ্যাপ ডাউনলোড (JAR)
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toastMsg" class="toast-msg"></div>
+
+  <script>
+    // Register Service Worker for iOS PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW error:', err));
+      });
+    }
+
+    let appData = { liveTv: [], sports: [], movies: [], playlists: [] };
+    let currentTab = 'livetv';
+    let currentCategory = 'ALL';
+    let currentItem = null;
+    let hls = null;
+
+    const videoEl = document.getElementById('videoPlayer');
+    const watermarkEl = document.getElementById('watermark');
+    const nowPlayingTitleEl = document.getElementById('nowPlayingTitle');
+    const serverListEl = document.getElementById('serverList');
+    const channelGridEl = document.getElementById('channelGrid');
+    const categoryScrollEl = document.getElementById('categoryScroll');
+    const searchInputEl = document.getElementById('searchInput');
+
+    // Detect iOS & show PWA banner if not standalone
+    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    if (isIos && !isStandalone && !localStorage.getItem('iosBannerDismissed')) {
+      document.getElementById('iosBanner').style.display = 'flex';
+    }
+    function dismissIosBanner() {
+      document.getElementById('iosBanner').style.display = 'none';
+      localStorage.setItem('iosBannerDismissed', 'true');
+    }
+
+    // Modal Handlers
+    function openInstallModal() {
+      document.getElementById('installModal').style.display = 'flex';
+    }
+    function closeInstallModal() {
+      document.getElementById('installModal').style.display = 'none';
+    }
+    window.onclick = function(event) {
+      const modal = document.getElementById('installModal');
+      if (event.target === modal) {
+        modal.style.display = 'none';
+      }
+    };
+
+    function showIosConfigGuide() {
+      showToast('📥 প্রোফাইল ডাউনলোড হচ্ছে। Safari পারমিশন দিলে Allow চাপুন, এরপর Settings > Profile Downloaded এ গিয়ে Install চাপুন।');
+    }
+
+    function showPwaGuide() {
+      alert("📲 Safari তে যেভাবে ইনস্টল করবেন:\n\n১. আইফোনের Safari ব্রাউজারের নিচে শেয়ার (Share 📤) আইকনে চাপ দিন।\n২. নিচে স্ক্রল করে 'Add to Home Screen (হোম স্ক্রিনে যোগ করুন)' অপশনটি নির্বাচন করুন।\n৩. 'Add' বাটনে চাপ দিলেই আপনার আইফোনে অ্যাপ তৈরি হয়ে যাবে!");
+    }
+
+    // Copy M3U playlist link
+    function copyM3uLink(e) {
+      if (e) e.preventDefault();
+      const m3uUrl = window.location.origin + '/playlist.m3u';
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(m3uUrl).then(() => {
+          showToast('✅ M3U লিংক কপি হয়েছে! আইফোনের VLC বা IPTV অ্যাপে পেস্ট করুন।');
+        });
+      } else {
+        window.location.href = '/playlist.m3u';
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toastMsg');
+      toast.innerText = msg;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 5000);
+    }
+
+    // Fetch channels data
+    async function initApp() {
+      try {
+        let res = await fetch('/api/channels').catch(() => null);
+        if (!res || !res.ok) {
+          res = await fetch('channels.json');
+        }
+        appData = await res.json();
+        renderCategories();
+        renderChannels();
+
+        // Autoplay first channel
+        const firstCat = appData.liveTv && appData.liveTv[0];
+        if (firstCat && firstCat.movies && firstCat.movies[0]) {
+          playChannel(firstCat.movies[0]);
+        }
+      } catch (err) {
+        console.error('Failed to load channels:', err);
+      }
+    }
+
+    // Switch active tab
+    function switchTab(tab) {
+      currentTab = tab;
+      currentCategory = 'ALL';
+      searchInputEl.value = '';
+      
+      document.querySelectorAll('.tab-item').forEach((el, idx) => {
+        el.classList.toggle('active', 
+          (tab === 'livetv' && idx === 0) ||
+          (tab === 'sports' && idx === 1) ||
+          (tab === 'movies' && idx === 2) ||
+          (tab === 'playlists' && idx === 3)
+        );
+      });
+
+      renderCategories();
+      renderChannels();
+    }
+
+    // Get current items list based on tab
+    function getActiveCategoryList() {
+      if (currentTab === 'livetv') return appData.liveTv || [];
+      if (currentTab === 'sports') return appData.sports || [];
+      if (currentTab === 'movies') return appData.movies || [];
+      return [];
+    }
+
+    // Render Categories
+    function renderCategories() {
+      categoryScrollEl.innerHTML = '';
+      if (currentTab === 'playlists') {
+        categoryScrollEl.style.display = 'none';
+        return;
+      }
+      categoryScrollEl.style.display = 'flex';
+
+      const catList = getActiveCategoryList();
+      const categories = ['ALL', ...catList.map(c => c.category_name).filter(Boolean)];
+
+      categories.forEach(cat => {
+        const pill = document.createElement('div');
+        pill.className = `cat-pill ${cat === currentCategory ? 'active' : ''}`;
+        pill.innerText = cat === 'ALL' ? 'সকল চ্যানেল' : cat;
+        pill.onclick = () => {
+          currentCategory = cat;
+          renderCategories();
+          renderChannels();
+        };
+        categoryScrollEl.appendChild(pill);
+      });
+    }
+
+    // Filter items based on category and search
+    function getFilteredItems() {
+      const query = searchInputEl.value.trim().toLowerCase();
+      
+      if (currentTab === 'playlists') {
+        const playlists = appData.playlists || [];
+        if (!query) return playlists.map(p => ({
+          title: p.title,
+          poster: p.logo,
+          sources: [{ server_name: 'M3U Stream', url: p.url }]
+        }));
+        return playlists.filter(p => p.title.toLowerCase().includes(query)).map(p => ({
+          title: p.title,
+          poster: p.logo,
+          sources: [{ server_name: 'M3U Stream', url: p.url }]
+        }));
+      }
+
+      const catList = getActiveCategoryList();
+      let items = [];
+
+      catList.forEach(cat => {
+        if (currentCategory === 'ALL' || cat.category_name === currentCategory) {
+          if (Array.isArray(cat.movies)) {
+            cat.movies.forEach(item => {
+              if (!query || (item.title && item.title.toLowerCase().includes(query))) {
+                items.push(item);
+              }
+            });
+          }
+        }
+      });
+
+      return items;
+    }
+
+    function onSearchChange() {
+      renderChannels();
+    }
+
+    // Render 3-column channel grid
+    function renderChannels() {
+      channelGridEl.innerHTML = '';
+      const items = getFilteredItems();
+
+      if (items.length === 0) {
+        channelGridEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #94A3B8; padding: 40px 0;">কোনো চ্যানেল বা কনটেন্ট পাওয়া যায়নি</div>';
+        return;
+      }
+
+      items.forEach(item => {
+        const card = document.createElement('div');
+        const isCurrent = currentItem && currentItem.title === item.title;
+        card.className = `channel-card ${isCurrent ? 'playing' : ''}`;
+        
+        const fallbackLogo = "https://images.unsplash.com/photo-1578022761797-b8636ac1773c?w=100&fit=crop";
+        const logo = item.poster || fallbackLogo;
+
+        card.innerHTML = `
+          <div class="live-dot"></div>
+          <img src="${logo}" class="channel-logo" alt="${item.title}" onerror="this.src='${fallbackLogo}'">
+          <div class="channel-name">${item.title}</div>
+        `;
+
+        card.onclick = () => playChannel(item);
+        channelGridEl.appendChild(card);
+      });
+    }
+
+    // Play selected channel with Safari Native HLS or Hls.js
+    function playChannel(item, sourceIndex = 0) {
+      currentItem = item;
+      nowPlayingTitleEl.innerText = item.title;
+
+      const sources = Array.isArray(item.sources) ? item.sources.filter(s => s && s.url && s.url.trim().length > 0) : [];
+      if (sources.length === 0) {
+        showToast('এই চ্যানেলের কোনো সক্রিয় স্ট্রিম লিঙ্ক পাওয়া যায়নি।');
+        return;
+      }
+
+      renderServerChips(sources, sourceIndex);
+      loadStream(sources[sourceIndex].url);
+      renderChannels();
+    }
+
+    function renderServerChips(sources, activeIdx) {
+      serverListEl.innerHTML = '';
+      sources.forEach((src, idx) => {
+        const chip = document.createElement('div');
+        chip.className = `server-chip ${idx === activeIdx ? 'active' : ''}`;
+        chip.innerText = src.server_name || `সার্ভার ${idx + 1}`;
+        chip.onclick = (e) => {
+          e.stopPropagation();
+          playChannel(currentItem, idx);
+        };
+        serverListEl.appendChild(chip);
+      });
+    }
+
+    function loadStream(streamUrl) {
+      if (!streamUrl) return;
+
+      // Clean up previous Hls.js instance if any
+      if (hls) {
+        hls.destroy();
+        hls = null;
+      }
+
+      // 1. Native HLS support (Apple Safari on iPhone, iPad, Mac)
+      if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+        videoEl.src = streamUrl;
+        videoEl.play().catch(e => console.log('Autoplay deferred:', e));
+      } 
+      // 2. Hls.js support (Chrome, Firefox, Android web)
+      else if (Hls.isSupported()) {
+        hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30
+        });
+        hls.loadSource(streamUrl);
+        hls.attachMedia(videoEl);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          videoEl.play().catch(e => console.log('Autoplay deferred:', e));
+        });
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.log('HLS Network error, recovering...');
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                console.log('HLS Media error, recovering...');
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                break;
+            }
+          }
+        });
+      } 
+      // 3. Fallback direct video source
+      else {
+        videoEl.src = streamUrl;
+        videoEl.play().catch(e => console.log('Autoplay deferred:', e));
+      }
+    }
+
+    // Start application
+    initApp();
+  </script>
+</body>
+</html>
