@@ -88,18 +88,29 @@ fun FirebaseAuthAdminStatusCard(
 ) {
     val authManager = repository.authManager
     val isLoggedIn = authManager.isUserLoggedIn()
+    val hasCloudToken = authManager.hasCloudAuthToken()
     val userEmail = authManager.getLoggedInEmail() ?: ""
     val isAuthorized = authManager.isAuthorizedAdmin()
+    val cardAccentColor = when {
+        isLoggedIn && hasCloudToken -> Color(0xFF10B981)
+        isLoggedIn -> Color(0xFFF59E0B)
+        else -> Color(0xFFEF4444)
+    }
+    val cardBgColor = when {
+        isLoggedIn && hasCloudToken -> Color(0xFF064E3B).copy(alpha = 0.35f)
+        isLoggedIn -> Color(0xFF78350F).copy(alpha = 0.35f)
+        else -> Color(0xFF7F1D1D).copy(alpha = 0.35f)
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isLoggedIn) Color(0xFF064E3B).copy(alpha = 0.35f) else Color(0xFF7F1D1D).copy(alpha = 0.35f)
+            containerColor = cardBgColor
         ),
         border = BorderStroke(
             1.2.dp,
-            if (isLoggedIn) Color(0xFF10B981) else Color(0xFFEF4444)
+            cardAccentColor
         )
     ) {
         Row(
@@ -117,15 +128,15 @@ fun FirebaseAuthAdminStatusCard(
                     modifier = Modifier
                         .size(42.dp)
                         .background(
-                            if (isLoggedIn) Color(0xFF10B981).copy(alpha = 0.2f) else Color(0xFFEF4444).copy(alpha = 0.2f),
+                            cardAccentColor.copy(alpha = 0.2f),
                             CircleShape
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (isLoggedIn) Icons.Rounded.CheckCircle else Icons.Rounded.Security,
+                        imageVector = if (isLoggedIn && hasCloudToken) Icons.Rounded.CheckCircle else Icons.Rounded.Security,
                         contentDescription = null,
-                        tint = if (isLoggedIn) Color(0xFF10B981) else Color(0xFFEF4444),
+                        tint = cardAccentColor,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -134,17 +145,25 @@ fun FirebaseAuthAdminStatusCard(
 
                 Column {
                     Text(
-                        text = if (isLoggedIn) "ফায়ারবেস অথেন্টিকেশন: সফল" else "ফায়ারবেস অথেন্টিকেশন: লগইন করা নেই",
-                        color = if (isLoggedIn) Color(0xFF34D399) else Color(0xFFFCA5A5),
+                        text = when {
+                            isLoggedIn && hasCloudToken -> "ফায়ারবেস অথেন্টিকেশন: সফল"
+                            isLoggedIn -> "লোকাল পিন সেশন (ক্লাউড টোকেন নেই)"
+                            else -> "ফায়ারবেস অথেন্টিকেশন: লগইন করা নেই"
+                        },
+                        color = when {
+                            isLoggedIn && hasCloudToken -> Color(0xFF34D399)
+                            isLoggedIn -> Color(0xFFFCD34D)
+                            else -> Color(0xFFFCA5A5)
+                        },
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = if (isLoggedIn) {
-                            if (isAuthorized) "অ্যাডমিন: $userEmail (অনুমোদিত)" else "ইউজার: $userEmail"
-                        } else {
-                            "ডাটাবেসে চ্যানেল আপডেট ও রাইট করতে লগইন করুন"
+                        text = when {
+                            isLoggedIn && hasCloudToken -> if (isAuthorized) "অ্যাডমিন: $userEmail (অনুমোদিত)" else "ইউজার: $userEmail"
+                            isLoggedIn -> "ক্লাউড আপডেটের জন্য Google Sign-In ব্যবহার করুন"
+                            else -> "ডাটাবেসে চ্যানেল আপডেট ও রাইট করতে লগইন করুন"
                         },
                         color = Color(0xFFCBD5E1),
                         fontSize = 11.sp
@@ -264,11 +283,12 @@ fun FirebaseAuthAdminDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (isLoggedIn) {
+                    val hasCloudToken = authManager.hasCloudAuthToken()
                     // Logged In Status View
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = Color(0xFF064E3B).copy(alpha = 0.4f),
-                        border = BorderStroke(1.dp, Color(0xFF10B981)),
+                        color = if (hasCloudToken) Color(0xFF064E3B).copy(alpha = 0.4f) else Color(0xFF78350F).copy(alpha = 0.4f),
+                        border = BorderStroke(1.dp, if (hasCloudToken) Color(0xFF10B981) else Color(0xFFF59E0B)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
@@ -278,28 +298,39 @@ fun FirebaseAuthAdminDialog(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.CheckCircle,
+                                imageVector = if (hasCloudToken) Icons.Rounded.CheckCircle else Icons.Rounded.Security,
                                 contentDescription = null,
-                                tint = Color(0xFF10B981),
+                                tint = if (hasCloudToken) Color(0xFF10B981) else Color(0xFFF59E0B),
                                 modifier = Modifier.size(44.dp)
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "বর্তমানে অ্যাডমিন হিসেবে লগইন আছেন",
+                                text = if (hasCloudToken) "বর্তমানে ফায়ারবেস অ্যাডমিন হিসেবে লগইন আছেন" else "লোকাল অ্যাডমিন সেশন চালু (ক্লাউড টোকেন নেই)",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = authManager.getLoggedInEmail() ?: "",
-                                color = Color(0xFF34D399),
+                                color = if (hasCloudToken) Color(0xFF34D399) else Color(0xFFFCD34D),
                                 fontWeight = FontWeight.Medium,
                                 fontSize = 13.sp
                             )
+                            if (!hasCloudToken) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "ডাটাবেস রুলস সুরক্ষিত থাকলে লোকাল পিন দিয়ে ক্লাউডে আপডেট হবে না। 'লগআউট' করে 'Sign in with Google' অথবা আসল ফায়ারবেস পাসওয়ার্ড দিয়ে লগইন করুন।",
+                                    color = Color(0xFFFDE68A),
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center,
+                                    lineHeight = 15.sp
+                                )
+                            }
                             val uid = authManager.getLoggedInUid()
                             if (!uid.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(2.dp))
+                                Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "UID: $uid",
                                     color = Color(0xFF94A3B8),
@@ -377,6 +408,7 @@ fun FirebaseAuthAdminDialog(
                                         val user = authResult.user
                                         val idToken = user?.getIdToken(false)?.await()?.token ?: googleIdToken
                                         authManager.saveGoogleSession(idToken, user?.email ?: "", user?.uid ?: "")
+                                        authManager.exchangeGoogleTokenForLegacyProject(googleIdToken)
                                         successMessage = "Google সাইন ইন সফল হয়েছে!"
                                         Toast.makeText(context, "স্বাগতম ${user?.email}", Toast.LENGTH_SHORT).show()
                                         onAuthSuccess()

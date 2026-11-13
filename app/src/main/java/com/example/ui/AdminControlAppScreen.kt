@@ -273,6 +273,19 @@ fun AdminControlAppScreen(
     var xtreamEditingId by remember { mutableStateOf<String?>(null) }
     var xtreamPasswordVisible by remember { mutableStateOf(false) }
 
+    // App Update Form State
+    val currentUpdate = repository.getCachedAppUpdateInfo()
+    var cloudUpdateInfo by remember { mutableStateOf(currentUpdate) }
+    var updateVersionName by remember { mutableStateOf(currentUpdate?.versionName ?: "") }
+    var updateVersionCode by remember { mutableStateOf((currentUpdate?.versionCode ?: 0).toString()) }
+    var updateDownloadUrl by remember { mutableStateOf(currentUpdate?.downloadUrl ?: "") }
+    var updateReleaseNotes by remember { mutableStateOf(currentUpdate?.releaseNotes ?: "") }
+    var updateReleaseDate by remember { mutableStateOf(currentUpdate?.releaseDate ?: "") }
+    var updateApkSize by remember { mutableStateOf(currentUpdate?.apkSize ?: "") }
+    var updateIsForce by remember { mutableStateOf(currentUpdate?.isForceUpdate ?: false) }
+    var isSavingUpdate by remember { mutableStateOf(false) }
+    var previewUpdateDialog by remember { mutableStateOf<AppUpdateInfo?>(null) }
+
     LaunchedEffect(Unit) {
         try {
             val remoteConfig = repository.fetchAppConfigFromFirebase()
@@ -286,19 +299,20 @@ fun AdminControlAppScreen(
                 if (remoteConfig.xtreamPassword.isNotBlank()) xtreamPasswordInput = remoteConfig.xtreamPassword
             }
         } catch (_: Exception) {}
+        try {
+            val remoteUpdate = repository.fetchAppUpdateInfo()
+            if (remoteUpdate != null) {
+                cloudUpdateInfo = remoteUpdate
+                updateVersionName = remoteUpdate.versionName
+                updateVersionCode = remoteUpdate.versionCode.toString()
+                updateDownloadUrl = remoteUpdate.downloadUrl
+                updateReleaseNotes = remoteUpdate.releaseNotes
+                updateReleaseDate = remoteUpdate.releaseDate
+                updateApkSize = remoteUpdate.apkSize
+                updateIsForce = remoteUpdate.isForceUpdate
+            }
+        } catch (_: Exception) {}
     }
-
-    // App Update Form State
-    val currentUpdate = repository.getCachedAppUpdateInfo()
-    var updateVersionName by remember { mutableStateOf(currentUpdate?.versionName ?: "") }
-    var updateVersionCode by remember { mutableStateOf((currentUpdate?.versionCode ?: 0).toString()) }
-    var updateDownloadUrl by remember { mutableStateOf(currentUpdate?.downloadUrl ?: "") }
-    var updateReleaseNotes by remember { mutableStateOf(currentUpdate?.releaseNotes ?: "") }
-    var updateReleaseDate by remember { mutableStateOf(currentUpdate?.releaseDate ?: "") }
-    var updateApkSize by remember { mutableStateOf(currentUpdate?.apkSize ?: "") }
-    var updateIsForce by remember { mutableStateOf(currentUpdate?.isForceUpdate ?: false) }
-    var isSavingUpdate by remember { mutableStateOf(false) }
-    var previewUpdateDialog by remember { mutableStateOf<AppUpdateInfo?>(null) }
 
     // Broadcast Form State
     var broadcastTitle by remember { mutableStateOf("") }
@@ -344,11 +358,13 @@ fun AdminControlAppScreen(
                 actions = {
                     val isAuthLoggedIn = repository.authManager.isUserLoggedIn()
                     val isAuthAdmin = repository.authManager.isAuthorizedAdmin()
+                    val hasCloudAuth = repository.authManager.hasCloudAuthToken()
+                    val isFullyCloudAuthed = isAuthLoggedIn && isAuthAdmin && hasCloudAuth
                     IconButton(onClick = { showAuthDialog = true }) {
                         Icon(
-                            imageVector = if (isAuthLoggedIn && isAuthAdmin) Icons.Rounded.AdminPanelSettings else Icons.Rounded.Lock,
+                            imageVector = if (isFullyCloudAuthed) Icons.Rounded.AdminPanelSettings else Icons.Rounded.Lock,
                             contentDescription = "Firebase Auth",
-                            tint = if (isAuthLoggedIn && isAuthAdmin) Color(0xFF10B981) else Color(0xFFF59E0B)
+                            tint = if (isFullyCloudAuthed) Color(0xFF10B981) else Color(0xFFF59E0B)
                         )
                     }
                     IconButton(onClick = { loadAnalyticsData() }) {
@@ -373,9 +389,10 @@ fun AdminControlAppScreen(
             item {
                 val isAuthLoggedIn = repository.authManager.isUserLoggedIn()
                 val isAuthAdmin = repository.authManager.isAuthorizedAdmin()
+                val hasCloudAuth = repository.authManager.hasCloudAuthToken()
                 val userEmail = repository.authManager.getLoggedInEmail()
 
-                if (!isAuthLoggedIn || !isAuthAdmin) {
+                if (!isAuthLoggedIn || !isAuthAdmin || !hasCloudAuth) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
@@ -395,14 +412,20 @@ fun AdminControlAppScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    "ফায়ারবেস অথেন্টিকেশন প্রয়োজন (nafitv24@gmail.com)",
+                                    if (isAuthLoggedIn && isAuthAdmin && !hasCloudAuth)
+                                        "শুধুমাত্র লোকাল সেশন (Firebase ক্লাউড টোকেন নেই)"
+                                    else
+                                        "ফায়ারবেস অথেন্টিকেশন প্রয়োজন (nafitv24@gmail.com)",
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 13.5.sp
                                 )
                             }
                             Text(
-                                "ফায়ারবেস সিকিউরিটি রুলস (auth.token.email === 'nafitv24@gmail.com') অনুযায়ী নতুন ম্যাচ, চ্যানেল বা প্লেলিস্ট যুক্ত বা ডিলিট করতে nafitv24@gmail.com দিয়ে লগইন থাকা আবশ্যক।",
+                                if (isAuthLoggedIn && isAuthAdmin && !hasCloudAuth)
+                                    "আপনি লোকাল অ্যাডমিন পিন দিয়ে প্রবেশ করেছেন, তাই ক্লাউড ডাটাবেসে রাইট পারমিশন নেই। Firebase-এ আপডেট সেভ করতে Google Sign-In অথবা আসল Firebase পাসওয়ার্ড দিয়ে লগইন করুন।"
+                                else
+                                    "ফায়ারবেস সিকিউরিটি রুলস (auth.token.email === 'nafitv24@gmail.com') অনুযায়ী নতুন ম্যাচ, চ্যানেল বা আপডেট যুক্ত বা ডিলিট করতে nafitv24@gmail.com দিয়ে লগইন থাকা আবশ্যক।",
                                 color = Color(0xFFCBD5E1),
                                 fontSize = 11.5.sp,
                                 lineHeight = 16.sp
@@ -423,7 +446,10 @@ fun AdminControlAppScreen(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    "nafitv24@gmail.com দিয়ে লগইন করুন",
+                                    if (isAuthLoggedIn && isAuthAdmin && !hasCloudAuth)
+                                        "Firebase ক্লাউডে লগইন করুন (Google / পাসওয়ার্ড)"
+                                    else
+                                        "nafitv24@gmail.com দিয়ে লগইন করুন",
                                     color = Color.Black,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.5.sp
@@ -1454,7 +1480,8 @@ fun AdminControlAppScreen(
                                             if (pushed) {
                                                 Toast.makeText(context, "✅ ব্রেকিং নিউজ সফলভাবে ক্লাউডে সিঙ্ক ও আপডেট হয়েছে!", Toast.LENGTH_LONG).show()
                                             } else {
-                                                Toast.makeText(context, "✅ ব্রেকিং নিউজ অ্যাপে আপডেট করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     },
@@ -1483,9 +1510,14 @@ fun AdminControlAppScreen(
                                         repository.saveMarqueeTickerText(MediaRepository.DEFAULT_MARQUEE_TEXT)
                                         onDataChanged()
                                         coroutineScope.launch {
-                                            repository.pushMarqueeTickerToFirebase(MediaRepository.DEFAULT_MARQUEE_TEXT)
+                                            val pushed = repository.pushMarqueeTickerToFirebase(MediaRepository.DEFAULT_MARQUEE_TEXT)
                                             onDataChanged()
-                                            Toast.makeText(context, "ডিফল্ট টেক্সট রিস্টোর করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                            if (pushed) {
+                                                Toast.makeText(context, "✅ ডিফল্ট টেক্সট রিস্টোর ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
                                         }
                                     },
                                     shape = RoundedCornerShape(10.dp),
@@ -1549,7 +1581,8 @@ fun AdminControlAppScreen(
                                                     if (ok) {
                                                         Toast.makeText(context, "✅ স্পোর্টস M3U ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        Toast.makeText(context, "স্পোর্টস M3U সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                        Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 }
                                             }
@@ -1569,10 +1602,15 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         sportsM3uInput = MediaRepository.DEFAULT_SPORTS_M3U_URL
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(sportsM3u = MediaRepository.DEFAULT_SPORTS_M3U_URL)
+                                            val ok = repository.pushAppConfigToFirebase(sportsM3u = MediaRepository.DEFAULT_SPORTS_M3U_URL)
                                             withContext(Dispatchers.Main) {
                                                 onDataChanged()
-                                                Toast.makeText(context, "ডিফল্ট স্পোর্টস M3U রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ ডিফল্ট স্পোর্টস M3U রিসেট ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     },
@@ -1651,7 +1689,8 @@ fun AdminControlAppScreen(
                                                     if (ok) {
                                                         Toast.makeText(context, "✅ JSON API লিংক সফলভাবে সেভ ও ফায়ারবেসে সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        Toast.makeText(context, "JSON API লিংক সংরক্ষিত ও ক্লাউডে পাঠানো হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                        Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 }
                                             }
@@ -1672,10 +1711,15 @@ fun AdminControlAppScreen(
                                         tapmadJsonInput = MediaRepository.DEFAULT_TAPMAD_JSON_URL
                                         tapmadM3uInput = MediaRepository.DEFAULT_TAPMAD_M3U_URL
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(tapmadJson = MediaRepository.DEFAULT_TAPMAD_JSON_URL)
+                                            val ok = repository.pushAppConfigToFirebase(tapmadJson = MediaRepository.DEFAULT_TAPMAD_JSON_URL)
                                             withContext(Dispatchers.Main) {
                                                 onDataChanged()
-                                                Toast.makeText(context, "ডিফল্ট JSON API লিংক রিসেট ও সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ ডিফল্ট JSON API লিংক রিসেট ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     },
@@ -2192,7 +2236,8 @@ fun AdminControlAppScreen(
                                                 if (pushResult.first) {
                                                     Toast.makeText(context, "✅ ম্যাচ সফলভাবে ফায়ারবেসে পাবলিশ ও সেভ হয়েছে!", Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    Toast.makeText(context, "ম্যাচ লোকালি সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    val err = pushResult.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                    Toast.makeText(context, "⚠️ ম্যাচ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                 }
                                             }
                                         }
@@ -2413,7 +2458,8 @@ fun AdminControlAppScreen(
                                                     if (ok) {
                                                         Toast.makeText(context, "✅ লাইভ টিভি M3U ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        Toast.makeText(context, "লাইভ টিভি M3U সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                        Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 }
                                             }
@@ -2433,10 +2479,15 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         liveTvM3uInput = MediaRepository.DEFAULT_LIVE_TV_M3U_URL
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(liveTvM3u = MediaRepository.DEFAULT_LIVE_TV_M3U_URL)
+                                            val ok = repository.pushAppConfigToFirebase(liveTvM3u = MediaRepository.DEFAULT_LIVE_TV_M3U_URL)
                                             withContext(Dispatchers.Main) {
                                                 onDataChanged()
-                                                Toast.makeText(context, "ডিফল্ট লাইভ টিভি M3U লিঙ্ক রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ ডিফল্ট লাইভ টিভি M3U রিসেট ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     },
@@ -2574,7 +2625,8 @@ fun AdminControlAppScreen(
                                                 if (pushResult.first) {
                                                     Toast.makeText(context, "✅ চ্যানেল ফায়ারবেসে সফলভাবে পাবলিশ হয়েছে!", Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    Toast.makeText(context, "চ্যানেল সংরক্ষিত ও ক্লাউডে সিঙ্ক পাঠানো হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    val err = pushResult.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                    Toast.makeText(context, "⚠️ চ্যানেল লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                 }
                                             }
                                         }
@@ -3020,11 +3072,12 @@ fun AdminControlAppScreen(
                                     ottHubIsSaving = true
                                     coroutineScope.launch {
                                         try {
-                                            if (ottHubType == "XTREAM") {
+                                            val savedName = ottHubName.trim()
+                                            val cloudOk = if (ottHubType == "XTREAM") {
                                                 val targetId = ottHubEditingId ?: "xtream_ott_${System.currentTimeMillis()}"
                                                 val acc = com.example.model.XtreamAccount(
                                                     id = targetId,
-                                                    name = ottHubName.trim(),
+                                                    name = savedName,
                                                     serverUrl = ottHubUrl.trim(),
                                                     username = ottHubUsername.trim(),
                                                     password = ottHubPassword.trim(),
@@ -3037,7 +3090,7 @@ fun AdminControlAppScreen(
                                                     statusMessage = "সক্রিয় (Active)"
                                                 )
                                                 repository.saveXtreamAccount(acc)
-                                                repository.pushXtreamAccountToFirebase(acc)
+                                                val ok = repository.pushXtreamAccountToFirebase(acc)
                                                 xtreamAccountsList = repository.getXtreamAccounts()
                                                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
@@ -3048,6 +3101,7 @@ fun AdminControlAppScreen(
                                                         }
                                                     } catch (_: Exception) {}
                                                 }
+                                                ok
                                             } else {
                                                 var cleanUrl = ottHubUrl.trim()
                                                 if (cleanUrl.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) &&
@@ -3058,7 +3112,7 @@ fun AdminControlAppScreen(
                                                 val targetId = ottHubEditingId ?: "pl_ott_${System.currentTimeMillis()}"
                                                 val newPl = PlaylistInfo(
                                                     id = targetId,
-                                                    title = ottHubName.trim(),
+                                                    title = savedName,
                                                     url = cleanUrl,
                                                     logoUrl = ottHubLogoUrl.trim().takeIf { it.isNotBlank() },
                                                     description = "OTT Movie Playlist",
@@ -3067,7 +3121,7 @@ fun AdminControlAppScreen(
                                                     isMovieOnly = true
                                                 )
                                                 repository.saveAdminPlaylist(newPl)
-                                                repository.pushPlaylistToFirebase(newPl)
+                                                val ok = repository.pushPlaylistToFirebase(newPl)
                                                 coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                                     try {
                                                         val movies = repository.fetchPlaylistMoviesOnly(newPl, forceRefresh = true)
@@ -3077,9 +3131,15 @@ fun AdminControlAppScreen(
                                                         }
                                                     } catch (_: Exception) {}
                                                 }
+                                                ok
                                             }
                                             onDataChanged()
-                                            Toast.makeText(context, "✅ '$ottHubName' ফায়ারবেস এবং মুভি সেকশনে যুক্ত ও সিঙ্ক হয়েছে!", Toast.LENGTH_LONG).show()
+                                            if (cloudOk) {
+                                                Toast.makeText(context, "✅ '$savedName' ফায়ারবেস এবং মুভি সেকশনে যুক্ত ও সিঙ্ক হয়েছে!", Toast.LENGTH_LONG).show()
+                                            } else {
+                                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                Toast.makeText(context, "⚠️ '$savedName' লোকালে যুক্ত হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
                                             // Reset
                                             ottHubEditingId = null
                                             ottHubName = ""
@@ -3211,10 +3271,15 @@ fun AdminControlAppScreen(
                                                         coroutineScope.launch {
                                                             try {
                                                                 repository.deleteXtreamAccount(acc.id)
-                                                                repository.deleteFromFirebase(acc.id, MediaType.MOVIE)
+                                                                val cloudOk = repository.deleteFromFirebase(acc.id, MediaType.MOVIE)
                                                                 xtreamAccountsList = repository.getXtreamAccounts()
                                                                 onDataChanged()
-                                                                Toast.makeText(context, "সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                                if (cloudOk) {
+                                                                    Toast.makeText(context, "✅ সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                                } else {
+                                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                                    Toast.makeText(context, "⚠️ অ্যাপ থেকে মুছেছে, কিন্তু Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                                }
                                                             } catch (e: Exception) {
                                                                 Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
                                                             }
@@ -3302,9 +3367,14 @@ fun AdminControlAppScreen(
                                                     onClick = {
                                                         coroutineScope.launch {
                                                             try {
-                                                                repository.deletePlaylist(pl.id)
+                                                                val cloudOk = repository.deletePlaylist(pl.id)
                                                                 onDataChanged()
-                                                                Toast.makeText(context, "প্লেলিস্ট ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                                if (cloudOk) {
+                                                                    Toast.makeText(context, "✅ প্লেলিস্ট ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                                } else {
+                                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                                    Toast.makeText(context, "⚠️ অ্যাপ থেকে মুছেছে, কিন্তু Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                                }
                                                             } catch (e: Exception) {
                                                                 Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
                                                             }
@@ -3368,7 +3438,8 @@ fun AdminControlAppScreen(
                                                     if (ok) {
                                                         Toast.makeText(context, "✅ মুভি প্লেলিস্ট ফায়ারবেসে সফলভাবে সেভ ও সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        Toast.makeText(context, "মুভি প্লেলিস্ট সংরক্ষিত ও ক্লাউডে সিঙ্ক করা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                        Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                                     }
                                                 }
                                             }
@@ -3388,10 +3459,15 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         moviesM3uInput = MediaRepository.DEFAULT_MOVIES_M3U_URL
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(moviesM3u = MediaRepository.DEFAULT_MOVIES_M3U_URL)
+                                            val ok = repository.pushAppConfigToFirebase(moviesM3u = MediaRepository.DEFAULT_MOVIES_M3U_URL)
                                             withContext(Dispatchers.Main) {
                                                 onDataChanged()
-                                                Toast.makeText(context, "মুভি প্লেলিস্ট রিসেট ও সিঙ্ক হয়েছে", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ মুভি প্লেলিস্ট রিসেট ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     },
@@ -3554,8 +3630,13 @@ fun AdminControlAppScreen(
                                             isLive = false
                                         )
                                         repository.saveCustomStream(item)
+                                        movieTitle = ""
+                                        server1Url = ""
+                                        server2Url = ""
+                                        moviePosterUrl = ""
+                                        onDataChanged()
                                         coroutineScope.launch {
-                                            repository.pushToFirebase(item)
+                                            val pushResult = repository.pushToFirebase(item)
                                             val notif = AppNotification(
                                                 title = "🎬 নতুন মুভি: ${item.title}",
                                                 message = "${item.category} ক্যাটাগরিতে নতুন মুভি যোগ করা হয়েছে। এখনই দেখুন!",
@@ -3566,13 +3647,16 @@ fun AdminControlAppScreen(
                                             repository.broadcastNotification(notif)
                                             NotificationHelper.showSystemNotification(context, notif)
                                             adminNotificationHistory = repository.getStoredNotifications()
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (pushResult.first) {
+                                                    Toast.makeText(context, "✅ মুভি ফায়ারবেসে সফলভাবে পাবলিশ হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = pushResult.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                    Toast.makeText(context, "⚠️ মুভি লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         }
-                                        onDataChanged()
-                                        movieTitle = ""
-                                        server1Url = ""
-                                        server2Url = ""
-                                        moviePosterUrl = ""
-                                        Toast.makeText(context, "মুভি যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -3834,15 +3918,23 @@ fun AdminControlAppScreen(
                                             repository.saveTapmadJsonUrl(tapmadUrl)
                                         }
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(
+                                            val ok = repository.pushAppConfigToFirebase(
                                                 liveTvM3u = liveUrl,
                                                 sportsM3u = sportsUrl,
                                                 moviesM3u = movUrl,
                                                 tapmadJson = tapmadUrl
                                             )
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ সকল প্লেলিস্ট ও JSON লিংক Firebase-এ সেভ এবং সিঙ্ক সম্পন্ন হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase সিঙ্ক ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         }
                                         onDataChanged()
-                                        Toast.makeText(context, "✅ সকল প্লেলিস্ট ও JSON লিংক সেভ এবং সিঙ্ক সম্পন্ন হয়েছে!", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1.3f).height(46.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black),
@@ -3863,15 +3955,23 @@ fun AdminControlAppScreen(
                                         repository.saveMoviesM3uUrl(MediaRepository.DEFAULT_MOVIES_M3U_URL)
                                         repository.saveTapmadJsonUrl(MediaRepository.DEFAULT_TAPMAD_JSON_URL)
                                         coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(
+                                            val ok = repository.pushAppConfigToFirebase(
                                                 liveTvM3u = MediaRepository.DEFAULT_LIVE_TV_M3U_URL,
                                                 sportsM3u = MediaRepository.DEFAULT_SPORTS_M3U_URL,
                                                 moviesM3u = MediaRepository.DEFAULT_MOVIES_M3U_URL,
                                                 tapmadJson = MediaRepository.DEFAULT_TAPMAD_JSON_URL
                                             )
+                                            withContext(Dispatchers.Main) {
+                                                onDataChanged()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ সকল ডিফল্ট M3U ও JSON লিংক রিসেট এবং Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিসেট হয়েছে, Firebase ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         }
                                         onDataChanged()
-                                        Toast.makeText(context, "সকল ডিফল্ট M3U ও JSON লিংক রিসেট করা হয়েছে", Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.weight(1f).height(46.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -4665,10 +4765,15 @@ fun AdminControlAppScreen(
                                             coroutineScope.launch {
                                                 try {
                                                     repository.deleteXtreamAccount(account.id)
-                                                    repository.deleteFromFirebase(account.id, MediaType.MOVIE)
+                                                    val cloudOk = repository.deleteFromFirebase(account.id, MediaType.MOVIE)
                                                     xtreamAccountsList = repository.getXtreamAccounts()
                                                     onDataChanged()
-                                                    Toast.makeText(context, "সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    if (cloudOk) {
+                                                        Toast.makeText(context, "✅ সার্ভার ফায়ারবেস ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                        Toast.makeText(context, "⚠️ অ্যাপ থেকে মুছেছে, কিন্তু Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                    }
                                                 } catch (e: Exception) {
                                                     Toast.makeText(context, "মুছতে ত্রুটি: ${e.message}", Toast.LENGTH_SHORT).show()
                                                 }
@@ -4755,12 +4860,15 @@ fun AdminControlAppScreen(
                                     }
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
-                                        color = Color(0xFF10B981).copy(alpha = 0.2f),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981))
+                                        color = if (cloudUpdateInfo != null) Color(0xFF10B981).copy(alpha = 0.2f) else Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, if (cloudUpdateInfo != null) Color(0xFF10B981) else Color(0xFFF59E0B))
                                     ) {
                                         Text(
-                                            text = "ক্লাউড: v$updateVersionName (Code $updateVersionCode)",
-                                            color = Color(0xFF34D399),
+                                            text = if (cloudUpdateInfo != null)
+                                                "ক্লাউড: v${cloudUpdateInfo!!.versionName} (Code ${cloudUpdateInfo!!.versionCode})"
+                                            else
+                                                "ক্লাউড: তথ্য নেই",
+                                            color = if (cloudUpdateInfo != null) Color(0xFF34D399) else Color(0xFFFBBF24),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -4957,11 +5065,16 @@ fun AdminControlAppScreen(
                                         coroutineScope.launch {
                                             isSavingUpdate = true
                                             val ok = repository.pushAppUpdateInfo(info)
-                                            isSavingUpdate = false
-                                            if (ok) {
-                                                Toast.makeText(context, "নতুন ভার্সন (v${info.versionName}, Code ${info.versionCode}) সফলভাবে Firebase ক্লাউডে পাবলিশ হয়েছে!", Toast.LENGTH_LONG).show()
-                                            } else {
-                                                Toast.makeText(context, "Firebase এ সেভ হয়েছে ও ক্যাশে সংরক্ষিত হয়েছে", Toast.LENGTH_SHORT).show()
+                                            withContext(Dispatchers.Main) {
+                                                isSavingUpdate = false
+                                                if (ok) {
+                                                    cloudUpdateInfo = info
+                                                    onDataChanged()
+                                                    Toast.makeText(context, "✅ নতুন ভার্সন (v${info.versionName}, Code ${info.versionCode}) সফলভাবে Firebase ক্লাউডে পাবলিশ হয়েছে!", Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules পারমিশন নেই" }
+                                                    Toast.makeText(context, "❌ Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     },
@@ -4969,7 +5082,8 @@ fun AdminControlAppScreen(
                                         .weight(1.5f)
                                         .height(48.dp),
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.Black)
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981), contentColor = Color.Black),
+                                    enabled = !isSavingUpdate
                                 ) {
                                     Icon(Icons.Rounded.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -5079,14 +5193,23 @@ fun AdminControlAppScreen(
                                                 val existing = repository.getSavedCloudStreamRepos()
                                                 val updated = (listOf(parsedRepo) + existing.filterNot { it.id == parsedRepo.id })
                                                 repository.saveCloudStreamRepos(updated)
-                                                repository.pushCloudStreamReposToFirebase(updated)
+                                                val ok = repository.pushCloudStreamReposToFirebase(updated)
                                                 repoUrlInput = ""
                                                 onDataChanged()
-                                                Toast.makeText(
-                                                    context,
-                                                    "✅ ${parsedRepo.name} (${parsedRepo.providers.size} টি সাইট/এক্সটেনশন) সফলভাবে এড হয়েছে ও Firebase এ সেভ হয়েছে!",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
+                                                if (ok) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        "✅ ${parsedRepo.name} (${parsedRepo.providers.size} টি সাইট/এক্সটেনশন) সফলভাবে এড হয়েছে ও Firebase এ সেভ হয়েছে!",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(
+                                                        context,
+                                                        "⚠️ ${parsedRepo.name} লোকালে এড হয়েছে, কিন্তু Firebase সেভ ব্যর্থ: $err",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
                                             } else {
                                                 Toast.makeText(
                                                     context,
@@ -5206,15 +5329,22 @@ fun AdminControlAppScreen(
                                     val currentCustom = repository.getCustomMovieProviders()
                                     val updated = (listOf(newProvider) + currentCustom.filterNot { it.id == newProvider.id })
                                     repository.saveCustomMovieProviders(updated)
-                                    coroutineScope.launch {
-                                        repository.pushCloudStreamReposToFirebase(repository.getSavedCloudStreamRepos())
-                                    }
                                     customSiteName = ""
                                     customSiteUrl = ""
                                     customSiteLogo = ""
                                     customSiteDesc = ""
                                     onDataChanged()
-                                    Toast.makeText(context, "✅ '${newProvider.name}' সাইট মুভি সেকশনে যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show()
+                                    coroutineScope.launch {
+                                        val ok = repository.pushCloudStreamReposToFirebase(repository.getSavedCloudStreamRepos())
+                                        withContext(Dispatchers.Main) {
+                                            if (ok) {
+                                                Toast.makeText(context, "✅ '${newProvider.name}' সাইট Firebase ও মুভি সেকশনে যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                Toast.makeText(context, "⚠️ '${newProvider.name}' লোকালে যুক্ত হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(44.dp),
                                 shape = RoundedCornerShape(10.dp),
@@ -5334,9 +5464,14 @@ fun AdminControlAppScreen(
                                                 val all = repository.getSavedCloudStreamRepos()
                                                 val updated = all.map { if (it.id == repo.id) refreshed else it }
                                                 repository.saveCloudStreamRepos(updated)
-                                                repository.pushCloudStreamReposToFirebase(updated)
+                                                val ok = repository.pushCloudStreamReposToFirebase(updated)
                                                 onDataChanged()
-                                                Toast.makeText(context, "✅ '${repo.name}' সফলভাবে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ '${repo.name}' সফলভাবে আপডেট ও Firebase-এ সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে রিফ্রেশ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             } else {
                                                 Toast.makeText(context, "আপডেট করা যায়নি", Toast.LENGTH_SHORT).show()
                                             }
@@ -5355,8 +5490,15 @@ fun AdminControlAppScreen(
                                 Button(
                                     onClick = {
                                         coroutineScope.launch {
-                                            repository.pushCloudStreamReposToFirebase(repository.getSavedCloudStreamRepos())
-                                            Toast.makeText(context, "✅ '${repo.name}' Firebase ক্লাউডে পুশ করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            val ok = repository.pushCloudStreamReposToFirebase(repository.getSavedCloudStreamRepos())
+                                            withContext(Dispatchers.Main) {
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ '${repo.name}' Firebase ক্লাউডে পুশ করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "❌ Firebase সিঙ্ক ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
+                                            }
                                         }
                                     },
                                     modifier = Modifier.weight(1f).height(36.dp),
@@ -5855,7 +5997,7 @@ fun AdminControlAppScreen(
                                             targetId = broadcastTargetId.trim().ifEmpty { null },
                                             timestamp = System.currentTimeMillis()
                                         )
-                                        repository.broadcastNotification(newNotif)
+                                        val (ok, msg) = repository.broadcastNotification(newNotif)
                                         NotificationHelper.showSystemNotification(context, newNotif)
                                         adminNotificationHistory = repository.getStoredNotifications()
                                         isSendingBroadcast = false
@@ -5863,7 +6005,11 @@ fun AdminControlAppScreen(
                                         broadcastMessage = ""
                                         broadcastImageUrl = ""
                                         broadcastTargetId = ""
-                                        Toast.makeText(context, "✅ নোটিফিকেশন সফলভাবে পাঠানো হয়েছে!", Toast.LENGTH_LONG).show()
+                                        if (ok) {
+                                            Toast.makeText(context, "✅ নোটিফিকেশন সফলভাবে Firebase-এ পাঠানো হয়েছে!", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase ব্রডকাস্ট ব্যর্থ: $msg", Toast.LENGTH_LONG).show()
+                                        }
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -5903,9 +6049,14 @@ fun AdminControlAppScreen(
                                     TextButton(
                                         onClick = {
                                             coroutineScope.launch {
-                                                repository.clearAllNotifications()
+                                                val ok = repository.clearAllNotificationsAsync()
                                                 adminNotificationHistory = emptyList()
-                                                Toast.makeText(context, "সকল নোটিফিকেশন মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                if (ok) {
+                                                    Toast.makeText(context, "✅ সকল নোটিফিকেশন Firebase ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                    Toast.makeText(context, "⚠️ লোকালে মুছেছে, Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                }
                                             }
                                         }
                                     ) {
@@ -5961,9 +6112,14 @@ fun AdminControlAppScreen(
                                             IconButton(
                                                 onClick = {
                                                     coroutineScope.launch {
-                                                        repository.deleteNotification(notif.id)
+                                                        val ok = repository.deleteNotificationAsync(notif.id)
                                                         adminNotificationHistory = repository.getStoredNotifications()
-                                                        Toast.makeText(context, "নোটিফিকেশন মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        if (ok) {
+                                                            Toast.makeText(context, "✅ নোটিফিকেশন Firebase ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                                        } else {
+                                                            val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                                            Toast.makeText(context, "⚠️ লোকালে মুছেছে, Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                                        }
                                                     }
                                                 }
                                             ) {
@@ -6464,12 +6620,20 @@ fun AdminControlAppScreen(
                                     )
 
                                     repository.saveCustomStream(updatedMatch)
-                                    coroutineScope.launch {
-                                        repository.pushToFirebase(updatedMatch)
-                                    }
-                                    onDataChanged()
                                     editingMatchItem = null
-                                    Toast.makeText(context, "খেলা ও সমস্ত সার্ভার লিঙ্ক সফলভাবে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                    onDataChanged()
+                                    coroutineScope.launch {
+                                        val res = repository.pushToFirebase(updatedMatch)
+                                        withContext(Dispatchers.Main) {
+                                            onDataChanged()
+                                            if (res.first) {
+                                                Toast.makeText(context, "✅ খেলা ও সমস্ত সার্ভার লিঙ্ক Firebase-এ আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val err = res.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                Toast.makeText(context, "⚠️ লোকালে আপডেট হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
                                 } else {
                                     Toast.makeText(context, "কমপক্ষে একটি কার্যকর সার্ভার স্ট্রিম লিংক দিন", Toast.LENGTH_SHORT).show()
                                 }
@@ -6781,12 +6945,20 @@ fun AdminControlAppScreen(
                                     )
 
                                     repository.saveCustomStream(updatedChannel)
-                                    coroutineScope.launch {
-                                        repository.pushToFirebase(updatedChannel)
-                                    }
-                                    onDataChanged()
                                     editingChannelItem = null
-                                    Toast.makeText(context, "${updatedChannel.title} সফলভাবে আপডেট ও ক্লাউডে সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                    onDataChanged()
+                                    coroutineScope.launch {
+                                        val res = repository.pushToFirebase(updatedChannel)
+                                        withContext(Dispatchers.Main) {
+                                            onDataChanged()
+                                            if (res.first) {
+                                                Toast.makeText(context, "✅ ${updatedChannel.title} Firebase ক্লাউডে সফলভাবে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val err = res.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                Toast.makeText(context, "⚠️ লোকালে আপডেট হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
                                 } else {
                                     Toast.makeText(context, "চ্যানেলের নাম এবং কমপক্ষে একটি কার্যকর সার্ভার স্ট্রিম লিংক দিন", Toast.LENGTH_SHORT).show()
                                 }
@@ -7091,34 +7263,40 @@ fun AdminControlAppScreen(
                                     repository.saveAdminPlaylist(updatedPl)
                                     repository.clearPlaylistChannelsCache(updatedPl.id)
 
+                                    var syncConfigMovies: String? = null
+                                    var syncConfigLiveTv: String? = null
+                                    var syncConfigSports: String? = null
                                     if (target.id == "pl_nafi_movies_json" || target.title.contains("movie", ignoreCase = true) || target.url.contains("movie", ignoreCase = true) || target.type.equals("JSON", ignoreCase = true)) {
                                         repository.saveMoviesM3uUrl(updatedPl.url)
                                         moviesM3uInput = updatedPl.url
-                                        coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(moviesM3u = updatedPl.url)
-                                        }
+                                        syncConfigMovies = updatedPl.url
                                     }
                                     if (target.id == "pl_nafi_live_tv" || target.title.contains("live tv", ignoreCase = true)) {
                                         repository.saveLiveTvM3uUrl(updatedPl.url)
-                                        coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(liveTvM3u = updatedPl.url)
-                                        }
+                                        syncConfigLiveTv = updatedPl.url
                                     }
                                     if (target.id == "pl_nafi_sports_main" || target.id == "pl_sonyliv_sports" || target.title.contains("sports", ignoreCase = true)) {
                                         repository.saveSportsM3uUrl(updatedPl.url)
-                                        coroutineScope.launch {
-                                            repository.pushAppConfigToFirebase(sportsM3u = updatedPl.url)
-                                        }
+                                        syncConfigSports = updatedPl.url
                                     }
 
                                     coroutineScope.launch {
-                                        val ok = repository.pushPlaylistToFirebase(updatedPl)
+                                        var configOk = true
+                                        if (syncConfigMovies != null || syncConfigLiveTv != null || syncConfigSports != null) {
+                                            configOk = repository.pushAppConfigToFirebase(
+                                                liveTvM3u = syncConfigLiveTv,
+                                                sportsM3u = syncConfigSports,
+                                                moviesM3u = syncConfigMovies
+                                            )
+                                        }
+                                        val ok = repository.pushPlaylistToFirebase(updatedPl) && configOk
                                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                             onDataChanged()
                                             if (ok) {
                                                 Toast.makeText(context, "✅ '${updatedPl.title}' ফায়ারবেস ক্লাউডে সফলভাবে সেভ ও আপডেট হয়েছে!", Toast.LENGTH_LONG).show()
                                             } else {
-                                                Toast.makeText(context, "⚠️ লোকাল সেভ হয়েছে, ফায়ারবেস ক্লাউড কানেকশন চেক করুন", Toast.LENGTH_SHORT).show()
+                                                val err = repository.lastFirebaseError.ifBlank { "ফায়ারবেস ক্লাউড কানেকশন বা Auth চেক করুন" }
+                                                Toast.makeText(context, "⚠️ লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     }
@@ -7449,12 +7627,20 @@ fun AdminControlAppScreen(
                                     )
 
                                     repository.saveCustomStream(updatedMovie)
-                                    coroutineScope.launch {
-                                        repository.pushToFirebase(updatedMovie)
-                                    }
-                                    onDataChanged()
                                     editingMovieItem = null
-                                    Toast.makeText(context, "${updatedMovie.title} সফলভাবে আপডেট ও ক্লাউডে সিঙ্ক হয়েছে!", Toast.LENGTH_SHORT).show()
+                                    onDataChanged()
+                                    coroutineScope.launch {
+                                        val res = repository.pushToFirebase(updatedMovie)
+                                        withContext(Dispatchers.Main) {
+                                            onDataChanged()
+                                            if (res.first) {
+                                                Toast.makeText(context, "✅ ${updatedMovie.title} Firebase ক্লাউডে সফলভাবে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val err = res.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                                Toast.makeText(context, "⚠️ লোকালে আপডেট হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
                                 } else {
                                     Toast.makeText(context, "মুভির নাম এবং কমপক্ষে একটি কার্যকর সার্ভার স্ট্রিম লিংক দিন", Toast.LENGTH_SHORT).show()
                                 }
@@ -7510,12 +7696,20 @@ fun AdminControlAppScreen(
                     onClick = {
                         val updated = target.copy(score1 = updateScore1.trim(), score2 = updateScore2.trim())
                         repository.saveCustomStream(updated)
-                        coroutineScope.launch {
-                            repository.pushToFirebase(updated)
-                        }
-                        onDataChanged()
                         updatingItem = null
-                        Toast.makeText(context, "স্কোর আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                        onDataChanged()
+                        coroutineScope.launch {
+                            val res = repository.pushToFirebase(updated)
+                            withContext(Dispatchers.Main) {
+                                onDataChanged()
+                                if (res.first) {
+                                    Toast.makeText(context, "✅ স্কোর Firebase ক্লাউডে আপডেট হয়েছে!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val err = res.second.ifBlank { repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" } }
+                                    Toast.makeText(context, "⚠️ স্কোর লোকালে সেভ হয়েছে, Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black)
                 ) {
@@ -7560,10 +7754,15 @@ fun AdminControlAppScreen(
                         adminSportsItems = adminSportsItems.filterNot { it.id == toRemove.id || repository.isItemDeleted(it) }
                         deletedIdsVersion++
                         coroutineScope.launch {
-                            repository.deleteMediaItem(toRemove)
+                            val ok = repository.deleteMediaItem(toRemove)
                             deletedIdsVersion++
                             onDataChanged()
-                            Toast.makeText(context, "${toRemove.title} সফলভাবে ডিলিট করা হয়েছে!", Toast.LENGTH_SHORT).show()
+                            if (ok) {
+                                Toast.makeText(context, "✅ ${toRemove.title} সফলভাবে Firebase ও অ্যাপ থেকে ডিলিট হয়েছে!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                Toast.makeText(context, "⚠️ অ্যাপ থেকে মুছেছে, কিন্তু Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444), contentColor = Color.White),
@@ -7614,9 +7813,14 @@ fun AdminControlAppScreen(
                         val toRemove = target
                         playlistToDelete = null
                         coroutineScope.launch {
-                            repository.deletePlaylist(toRemove.id)
+                            val ok = repository.deletePlaylist(toRemove.id)
                             onDataChanged()
-                            Toast.makeText(context, "${toRemove.title} প্লেলিস্ট সফলভাবে মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
+                            if (ok) {
+                                Toast.makeText(context, "✅ ${toRemove.title} প্লেলিস্ট Firebase ও অ্যাপ থেকে মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                Toast.makeText(context, "⚠️ লোকালে মুছেছে, কিন্তু Firebase ডিলিট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444), contentColor = Color.White),
@@ -7671,10 +7875,18 @@ fun AdminControlAppScreen(
                         val updated = current.filterNot { it.id == toRemove.id }
                         repository.saveCloudStreamRepos(updated)
                         coroutineScope.launch {
-                            repository.pushCloudStreamReposToFirebase(updated)
+                            val ok = repository.pushCloudStreamReposToFirebase(updated)
+                            withContext(Dispatchers.Main) {
+                                onDataChanged()
+                                if (ok) {
+                                    Toast.makeText(context, "✅ '${toRemove.name}' রিপোজিটরি Firebase ও অ্যাপ থেকে মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val err = repository.lastFirebaseError.ifBlank { "Firebase Auth বা Rules চেক করুন" }
+                                    Toast.makeText(context, "⚠️ লোকালে মুছেছে, কিন্তু Firebase আপডেট ব্যর্থ: $err", Toast.LENGTH_LONG).show()
+                                }
+                            }
                         }
                         onDataChanged()
-                        Toast.makeText(context, "✅ '${toRemove.name}' রিপোজিটরি মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444), contentColor = Color.White),
                     shape = RoundedCornerShape(8.dp)
