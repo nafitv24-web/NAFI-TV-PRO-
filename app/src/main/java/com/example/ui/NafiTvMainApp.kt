@@ -149,7 +149,7 @@ fun NafiTvMainApp(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val repository = remember { MediaRepository(context) }
+    val repository = remember { MediaRepository(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
 
     var currentTab by rememberSaveable { mutableStateOf(AppTab.LIVE_TV) }
@@ -247,8 +247,13 @@ fun NafiTvMainApp(
     )
 
     LaunchedEffect(Unit) {
+        val appCtx = context.applicationContext
+        try { NotificationHelper.initNotificationChannel(appCtx) } catch (_: Throwable) {}
+        try { MovieDownloadManager.init(appCtx) } catch (_: Throwable) {}
+        try { com.example.util.ChannelStatusManager.init(appCtx) } catch (_: Throwable) {}
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                kotlinx.coroutines.delay(700L)
                 if (androidx.core.content.ContextCompat.checkSelfPermission(
                         context,
                         android.Manifest.permission.POST_NOTIFICATIONS
@@ -258,9 +263,6 @@ fun NafiTvMainApp(
                 }
             }
         } catch (_: Throwable) {}
-        try { NotificationHelper.initNotificationChannel(context) } catch (_: Throwable) {}
-        try { MovieDownloadManager.init(context) } catch (_: Throwable) {}
-        try { com.example.util.ChannelStatusManager.init(context) } catch (_: Throwable) {}
     }
 
     // State lists - Instant 0-millisecond startup initialization from fast memory / built-in defaults (butter-smooth)

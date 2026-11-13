@@ -26,7 +26,26 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         super.onCreate()
         instance = this
 
-        // 1. Register optimized Coil ImageLoader globally so all AsyncImage instances use low-RAM decode
+        // 1. Install global crash protection FIRST so any background startup error is intercepted immediately
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Log.e("NafiTvApp", "Intercepted crash on thread: ${thread.name}", throwable)
+            val msg = throwable.message ?: ""
+
+            try {
+                customImageLoader?.memoryCache?.clear()
+                sharedOkHttpClient.connectionPool.evictAll()
+            } catch (_: Throwable) {}
+
+            if (thread != Looper.getMainLooper().thread) {
+                Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
+            } else {
+                Log.e("NafiTvApp", "Intercepted fatal UI thread exception: ${throwable.javaClass.simpleName} - $msg", throwable)
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+        }
+
+        // 2. Register optimized Coil ImageLoader globally so all AsyncImage instances use low-RAM decode
         try {
             coil.Coil.setImageLoader(newImageLoader())
         } catch (e: Throwable) {
@@ -44,37 +63,19 @@ class NafiTvApp : Application(), ImageLoaderFactory {
                 com.example.util.StorageCleaner.cleanOnStartup(this@NafiTvApp)
             } catch (_: Throwable) {}
         }
-
-        // 2. Global crash protection: Intercepts decoder, GPU, network & memory crashes
-        // preventing unexpected process termination on normal & low-spec (512MB RAM) devices
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e("NafiTvApp", "Intercepted crash on thread: ${thread.name}", throwable)
-            val msg = throwable.message ?: ""
-
-            // Immediately clear memory caches to alleviate any memory pressure
-            try {
-                customImageLoader?.memoryCache?.clear()
-                sharedOkHttpClient.connectionPool.evictAll()
-            } catch (_: Throwable) {}
-
-            if (thread != Looper.getMainLooper().thread) {
-                // Background thread errors (network, ExoPlayer codecs, image loading, GC) -> suppress to keep app alive
-                Log.w("NafiTvApp", "Suppressed background exception on ${thread.name}: ${throwable.javaClass.simpleName} - $msg")
-            } else {
-                Log.e("NafiTvApp", "Intercepted fatal UI thread exception: ${throwable.javaClass.simpleName} - $msg", throwable)
-                defaultHandler?.uncaughtException(thread, throwable)
-            }
-        }
     }
 
     fun isLowRamEnvironment(): Boolean {
-        val actManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-        val memInfo = ActivityManager.MemoryInfo()
-        actManager?.getMemoryInfo(memInfo)
-        val totalRamMb = memInfo.totalMem / (1024 * 1024)
-        val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024)
-        return actManager?.isLowRamDevice == true || totalRamMb <= 1500 || maxHeapMb <= 192
+        return try {
+            val actManager = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            actManager?.getMemoryInfo(memInfo)
+            val totalRamMb = memInfo.totalMem / (1024 * 1024)
+            val maxHeapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+            actManager?.isLowRamDevice == true || totalRamMb <= 1500 || maxHeapMb <= 192
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     override fun newImageLoader(): ImageLoader {
@@ -149,22 +150,25 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         val sharedOkHttpClient: OkHttpClient by lazy {
             val isLowRam = try {
                 instance.isLowRamEnvironment()
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 false
             }
             val maxIdle = if (isLowRam) 4 else 8
             val keepAliveDuration = if (isLowRam) 30L else 120L
 
-            val cacheDirectory = File(instance.cacheDir, "nafitv_http_cache")
-            val cacheSize = if (isLowRam) 5L * 1024 * 1024 else 12L * 1024 * 1024
-
-            OkHttpClient.Builder()
-                .cache(okhttp3.Cache(cacheDirectory, cacheSize))
+            val builder = OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS)
                 .connectionPool(ConnectionPool(maxIdle, keepAliveDuration, TimeUnit.SECONDS))
                 .retryOnConnectionFailure(true)
-                .build()
+
+            try {
+                val cacheDirectory = File(instance.cacheDir, "nafitv_http_cache")
+                val cacheSize = if (isLowRam) 5L * 1024 * 1024 else 12L * 1024 * 1024
+                builder.cache(okhttp3.Cache(cacheDirectory, cacheSize))
+            } catch (_: Throwable) {}
+
+            builder.build()
         }
     }
 }
