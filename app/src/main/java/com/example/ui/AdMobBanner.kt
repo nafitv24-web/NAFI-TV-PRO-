@@ -86,8 +86,10 @@ fun NonIntrusiveAdMobBanner(
 
     LaunchedEffect(Unit) {
         try {
-            kotlinx.coroutines.delay(800)
-            initializeAdMobSafely(context)
+            kotlinx.coroutines.delay(1200)
+            withContext(Dispatchers.IO) {
+                initializeAdMobSafely(context)
+            }
         } catch (_: Throwable) {}
     }
 

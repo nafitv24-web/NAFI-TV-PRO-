@@ -186,9 +186,9 @@ fun NafiTvMainApp(
     var activeMovieBrowserProvider by remember { mutableStateOf<MovieProvider?>(null) }
     var isExtensionsManagementActive by remember { mutableStateOf(false) }
     var isOfflineDownloadsActive by remember { mutableStateOf(false) }
-    var cloudStreamRepos by remember { mutableStateOf(repository.getSavedCloudStreamRepos()) }
-    var allMovieProviders by remember { mutableStateOf(repository.getAllMovieProviders()) }
-    var isAdultHidden by rememberSaveable { mutableStateOf(repository.isAdultContentHidden()) }
+    var cloudStreamRepos by remember { mutableStateOf<List<CloudStreamRepo>>(emptyList()) }
+    var allMovieProviders by remember { mutableStateOf<List<MovieProvider>>(emptyList()) }
+    var isAdultHidden by rememberSaveable { mutableStateOf(true) }
 
     // Deep link repository handler
     LaunchedEffect(deepLinkRepoUrl) {
@@ -237,7 +237,7 @@ fun NafiTvMainApp(
     var showUpdateDialog by remember { mutableStateOf(false) }
 
     // Notification Center State
-    var notificationsList by remember { mutableStateOf(repository.getStoredNotifications()) }
+    var notificationsList by remember { mutableStateOf<List<AppNotification>>(emptyList()) }
     var showNotificationCenterDialog by remember { mutableStateOf(false) }
 
     // Notification Permission Launcher (Android 13+)
@@ -248,43 +248,37 @@ fun NafiTvMainApp(
 
     LaunchedEffect(Unit) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    android.Manifest.permission.POST_NOTIFICATIONS
-                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
+            try {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+            } catch (_: Throwable) {}
         }
-        NotificationHelper.initNotificationChannel(context)
-        MovieDownloadManager.init(context)
-        com.example.util.ChannelStatusManager.init(context)
+        withContext(Dispatchers.IO) {
+            try { NotificationHelper.initNotificationChannel(context) } catch (_: Throwable) {}
+            try { MovieDownloadManager.init(context) } catch (_: Throwable) {}
+            try { com.example.util.ChannelStatusManager.init(context) } catch (_: Throwable) {}
+        }
     }
 
-    // State lists - Instant 0-millisecond startup initialization from fast memory / built-in defaults (butter-smooth)
-    var sportsList by remember {
-        mutableStateOf(repository.getDefaultBuiltinSports())
-    }
-    var liveTvList by remember {
-        mutableStateOf(repository.getDefaultBuiltinLiveTv())
-    }
-    var moviesList by remember {
-        mutableStateOf(repository.getDefaultBuiltinMovies())
-    }
-    var playlistsList by remember {
-        mutableStateOf(repository.getInitialPlaylists().filterNot {
-            it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-        })
-    }
-    var adminPlaylistsList by remember { mutableStateOf(repository.getInitialPlaylists()) }
+    // State lists - Populated asynchronously on Dispatchers.IO in LaunchedEffect(Unit) so UI renders frame 0 without blocking Main thread
+    var sportsList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var liveTvList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var moviesList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var playlistsList by remember { mutableStateOf<List<PlaylistInfo>>(emptyList()) }
+    var adminPlaylistsList by remember { mutableStateOf<List<PlaylistInfo>>(emptyList()) }
     var customList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val allLiveChannels = remember(liveTvList, customList, m3uList) {
         liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
     }
     var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var breakingNewsText by remember { mutableStateOf(repository.getMarqueeTickerText()) }
-    var isRefreshing by remember { mutableStateOf(false) }
+    var breakingNewsText by remember { mutableStateOf("") }
+    var isRefreshing by remember { mutableStateOf(true) }
     var currentLoadingStage by remember { mutableStateOf(LoadingStage.IDLE) }
 
     fun checkForUpdates(isManualCheck: Boolean = false) {
@@ -636,26 +630,38 @@ fun NafiTvMainApp(
     }
 
     LaunchedEffect(Unit) {
-        // 1. Load persistent disk cache asynchronously on Dispatchers.IO so frame 0 renders with 0ms delay like butter
+        // 1. Load bundled JSON assets + persistent disk cache asynchronously on Dispatchers.IO so Frame 0 renders without Main-thread stall
         withContext(Dispatchers.IO) {
-            val cachedTv = repository.getInitialLiveTv()
-            val cachedSports = repository.getInitialSports()
-            val cachedMovies = repository.getInitialMoviesSeries()
-            val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
-                it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-            }
-            val cachedAdminPl = repository.getInitialPlaylists() + repository.getAdminPlaylists()
-            val cachedCustom = repository.getCustomStreams()
-            val favs = repository.getFavoriteIds()
-            withContext(Dispatchers.Main) {
-                if (cachedTv.isNotEmpty()) liveTvList = cachedTv
-                if (cachedSports.isNotEmpty()) sportsList = cachedSports
-                if (cachedMovies.isNotEmpty()) moviesList = cachedMovies
-                playlistsList = cachedPl
-                adminPlaylistsList = cachedAdminPl
-                customList = cachedCustom
-                favoriteIds = favs
-            }
+            try {
+                val adultHidden = repository.isAdultContentHidden()
+                val repos = repository.getSavedCloudStreamRepos()
+                val providers = repository.getAllMovieProviders()
+                val storedNotifs = repository.getStoredNotifications()
+                val ticker = repository.getMarqueeTickerText()
+                val cachedTv = repository.getInitialLiveTv()
+                val cachedSports = repository.getInitialSports()
+                val cachedMovies = repository.getInitialMoviesSeries()
+                val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
+                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+                }
+                val cachedAdminPl = repository.getInitialPlaylists() + repository.getAdminPlaylists()
+                val cachedCustom = repository.getCustomStreams()
+                val favs = repository.getFavoriteIds()
+                withContext(Dispatchers.Main) {
+                    isAdultHidden = adultHidden
+                    cloudStreamRepos = repos
+                    allMovieProviders = providers
+                    notificationsList = storedNotifs
+                    breakingNewsText = ticker
+                    if (cachedTv.isNotEmpty()) liveTvList = cachedTv
+                    if (cachedSports.isNotEmpty()) sportsList = cachedSports
+                    if (cachedMovies.isNotEmpty()) moviesList = cachedMovies
+                    playlistsList = cachedPl
+                    adminPlaylistsList = cachedAdminPl
+                    customList = cachedCustom
+                    favoriteIds = favs
+                }
+            } catch (_: Throwable) {}
         }
         // 2. Graceful delay before network sync so user can immediately navigate with 60/120fps butter-smooth responsiveness
         delay(1200)
@@ -727,16 +733,18 @@ fun NafiTvMainApp(
             )
         }
     } else if (activeMovieBrowserProvider != null) {
-        // IN-APP MOVIE & CLOUDSTREAM WEBSITE BROWSER WITH AD-SHIELD & STREAM DETECTOR
-        MovieBrowserScreen(
-            repository = repository,
-            provider = activeMovieBrowserProvider!!,
-            onClose = { activeMovieBrowserProvider = null },
-            onPlayDirectMedia = { item ->
-                activePlaybackPlaylist = listOf(item)
-                selectedMediaItem = item
-            }
-        )
+        activeMovieBrowserProvider?.let { provider ->
+            // IN-APP MOVIE & CLOUDSTREAM WEBSITE BROWSER WITH AD-SHIELD & STREAM DETECTOR
+            MovieBrowserScreen(
+                repository = repository,
+                provider = provider,
+                onClose = { activeMovieBrowserProvider = null },
+                onPlayDirectMedia = { item ->
+                    activePlaybackPlaylist = listOf(item)
+                    selectedMediaItem = item
+                }
+            )
+        }
     } else if (isExtensionsManagementActive) {
         // CLOUDSTREAM EXTENSIONS & REPOSITORIES MANAGEMENT SCREEN
         ExtensionsManagementScreen(
@@ -1810,15 +1818,16 @@ fun NafiTvMainApp(
     }
 
     // In-App Update Dialog (Beautiful Animated M3 Popup for Auto-Updating App)
-    if (showUpdateDialog && availableUpdateInfo != null) {
-        val info = availableUpdateInfo!!
-        AppUpdateDialog(
-            updateInfo = info,
-            onDismiss = {
-                repository.dismissUpdate(info.versionCode, info.versionName)
-                showUpdateDialog = false
-            }
-        )
+    if (showUpdateDialog) {
+        availableUpdateInfo?.let { info ->
+            AppUpdateDialog(
+                updateInfo = info,
+                onDismiss = {
+                    repository.dismissUpdate(info.versionCode, info.versionName)
+                    showUpdateDialog = false
+                }
+            )
+        }
     }
 
     // Notification Center Dialog (In-App notification board for matches, channels, movies and announcements)
@@ -3900,7 +3909,7 @@ fun LiveEventMatchCard(
         !sport.status.equals("null", ignoreCase = true)
     ) {
         sport.status.uppercase()
-    } else if (!sport.tournament.isNullOrBlank() && sport.tournament!!.contains("Stage", ignoreCase = true)) {
+    } else if (sport.tournament?.contains("Stage", ignoreCase = true) == true) {
         "GROUP STAGE"
     } else {
         "1ST ROUND"

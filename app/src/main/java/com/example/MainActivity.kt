@@ -48,7 +48,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        extractDeepLink(intent)
+        try {
+            extractDeepLink(intent)
+        } catch (_: Throwable) {}
     }
 
     private fun extractDeepLink(intent: Intent?) {

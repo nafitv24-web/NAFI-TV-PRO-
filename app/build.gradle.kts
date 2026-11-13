@@ -122,7 +122,8 @@ android {
         "META-INF/*.kotlin_module",
         "META-INF/INDEX.LIST",
         "META-INF/io.netty.versions.properties",
-        "google/**/*.proto"
+        "google/**/*.proto",
+        "DebugProbesKt.bin"
       )
     }
   }
@@ -159,7 +160,8 @@ dependencies {
   // implementation(libs.androidx.camera.lifecycle)
   // implementation(libs.androidx.camera.view)
   implementation(libs.androidx.compose.material.icons.core)
-  implementation(libs.androidx.compose.material.icons.extended)
+  // Replaced full material-icons-extended (~11,000 icons / ~40MB dex) with lightweight tree-shaken local vectors
+  // implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
@@ -192,6 +194,7 @@ dependencies {
   // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.play.services.ads)
+  implementation(libs.androidx.work.runtime)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

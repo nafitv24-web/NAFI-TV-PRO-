@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Looper
 import android.util.Log
+import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.disk.DiskCache
@@ -16,11 +17,17 @@ import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class NafiTvApp : Application(), ImageLoaderFactory {
+class NafiTvApp : Application(), ImageLoaderFactory, Configuration.Provider {
 
     private var customImageLoader: ImageLoader? = null
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setMinimumLoggingLevel(Log.ERROR)
+            .build()
 
     override fun onCreate() {
         super.onCreate()
@@ -34,7 +41,9 @@ class NafiTvApp : Application(), ImageLoaderFactory {
 
             try {
                 customImageLoader?.memoryCache?.clear()
-                sharedOkHttpClient.connectionPool.evictAll()
+                if (isOkHttpInitialized) {
+                    sharedOkHttpClient.connectionPool.evictAll()
+                }
             } catch (_: Throwable) {}
 
             if (thread != Looper.getMainLooper().thread) {
@@ -45,19 +54,11 @@ class NafiTvApp : Application(), ImageLoaderFactory {
             }
         }
 
-        // 2. Register optimized Coil ImageLoader globally so all AsyncImage instances use low-RAM decode
-        try {
-            coil.Coil.setImageLoader(newImageLoader())
-        } catch (e: Throwable) {
-            Log.w("NafiTvApp", "Coil image loader init error", e)
-        }
-
-        try {
-            com.example.util.SportsInteractionManager.init(this)
-        } catch (_: Throwable) {}
-
-        // Light background maintenance delayed by 4 seconds so UI loads instantaneously like butter
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        // Light background initialization & maintenance off the Main thread so startup is instant & crash-free
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            try {
+                com.example.util.SportsInteractionManager.init(this@NafiTvApp)
+            } catch (_: Throwable) {}
             try {
                 kotlinx.coroutines.delay(4000)
                 com.example.util.StorageCleaner.cleanOnStartup(this@NafiTvApp)
@@ -147,7 +148,11 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         lateinit var instance: NafiTvApp
             private set
 
+        @Volatile
+        private var isOkHttpInitialized = false
+
         val sharedOkHttpClient: OkHttpClient by lazy {
+            isOkHttpInitialized = true
             val isLowRam = try {
                 instance.isLowRamEnvironment()
             } catch (_: Throwable) {

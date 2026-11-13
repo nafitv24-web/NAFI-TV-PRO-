@@ -54,10 +54,14 @@ class ExampleRobolectricTest {
       "WorkManagerInitializer must be removed from InitializationProvider metadata",
       metaKeys.contains("androidx.work.WorkManagerInitializer")
     )
+    org.junit.Assert.assertTrue(
+      "Application must implement WorkManager Configuration.Provider for lazy init",
+      context.applicationContext is androidx.work.Configuration.Provider
+    )
     val workManagerResult = runCatching { androidx.work.WorkManager.getInstance(context) }
     org.junit.Assert.assertTrue(
-      "WorkManager should not be eagerly initialized on startup",
-      workManagerResult.isFailure
+      "WorkManager should initialize cleanly on demand via Configuration.Provider",
+      workManagerResult.isSuccess
     )
   }
 }
