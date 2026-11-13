@@ -51,8 +51,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -149,7 +151,7 @@ fun NafiTvMainApp(
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
-    val repository = remember { MediaRepository(context.applicationContext) }
+    val repository = remember { MediaRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
     var currentTab by rememberSaveable { mutableStateOf(AppTab.LIVE_TV) }
@@ -247,22 +249,18 @@ fun NafiTvMainApp(
     )
 
     LaunchedEffect(Unit) {
-        val appCtx = context.applicationContext
-        try { NotificationHelper.initNotificationChannel(appCtx) } catch (_: Throwable) {}
-        try { MovieDownloadManager.init(appCtx) } catch (_: Throwable) {}
-        try { com.example.util.ChannelStatusManager.init(appCtx) } catch (_: Throwable) {}
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                kotlinx.coroutines.delay(700L)
-                if (androidx.core.content.ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.POST_NOTIFICATIONS
-                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-                ) {
-                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
-        } catch (_: Throwable) {}
+        }
+        NotificationHelper.initNotificationChannel(context)
+        MovieDownloadManager.init(context)
+        com.example.util.ChannelStatusManager.init(context)
     }
 
     // State lists - Instant 0-millisecond startup initialization from fast memory / built-in defaults (butter-smooth)
@@ -2244,6 +2242,174 @@ fun MenuScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // CARD -2: iPhone (iOS) & Web Player Support
+        item {
+            val clipboardManager = LocalClipboardManager.current
+            val webAppUrl = "https://ais-pre-ofnmycdfnhhqqinppa54kx-862181890531.asia-southeast1.run.app"
+            val m3uUrl = "$webAppUrl/playlist.m3u"
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF00E5FF).copy(alpha = 0.15f),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PhoneIphone,
+                                    contentDescription = "iPhone Support",
+                                    tint = Color(0xFF00E5FF),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "আইফোন ও আইপ্যাড (iOS / iPhone)",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(0xFF10B981).copy(alpha = 0.2f)
+                                ) {
+                                    Text(
+                                        text = "iOS Ready",
+                                        color = Color(0xFF10B981),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Safari ব্রাউজারে অ্যাপের মতো চালানো এবং VLC / IPTV Smarters এ প্লে করার উপায়",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    // Instruction Steps Box
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF0F172A),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "📲 আইফোনে অ্যাপ ইনস্টল করার ৩টি সহজ উপায়:",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "১. সরাসরি প্রোফাইল ইনস্টল (সবচেয়ে সহজ): Safari-তে ওয়েব লিংক খুলে 'ইনস্টল করুন' চাপলে Profile ডাউনলোড হবে, এরপর Settings > Profile Downloaded এ গিয়ে Install চাপুন।\n" +
+                                        "২. Safari PWA: Safari এর নিচে শেয়ার (Share 📤) > 'Add to Home Screen' চাপলে আসল অ্যাপ হিসেবে আইফোনে তৈরি হবে।\n" +
+                                        "৩. IPA ফাইল: AltStore বা Scarlet ব্যবহারকারীদের জন্য সরাসরি .ipa প্যাকেজ উপলব্ধ।",
+                                color = Color(0xFFE2E8F0),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    // Action buttons
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(webAppUrl))
+                                    Toast.makeText(context, "ওয়েব লিংক কপি হয়েছে! আইফোনে Safari দিয়ে খুলুন।", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color(0xFF020617)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("আইফোন লিংক কপি", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val mobileConfigUrl = "$webAppUrl/nafitv.mobileconfig"
+                                    clipboardManager.setText(AnnotatedString(mobileConfigUrl))
+                                    Toast.makeText(context, "iOS Profile লিংক কপি হয়েছে!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("iOS Profile লিংক", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(m3uUrl))
+                                    Toast.makeText(context, "M3U লিংক কপি হয়েছে! আইফোনের VLC বা IPTV অ্যাপে পেস্ট করুন।", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.PlaylistPlay, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("M3U লিংক কপি", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val ipaUrl = "$webAppUrl/nafitv.ipa"
+                                    clipboardManager.setText(AnnotatedString(ipaUrl))
+                                    Toast.makeText(context, "iOS IPA লিংক কপি হয়েছে!", Toast.LENGTH_SHORT).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("iOS IPA লিংক", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // CARD -1: App Display Mode Switcher (মোবাইল / টিভি রিমোট মোড নির্বাচন ও পরিবর্তন)
         item {
             Card(

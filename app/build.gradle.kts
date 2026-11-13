@@ -67,16 +67,15 @@ android {
     ndk {
       abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
     }
-    resourceConfigurations += listOf("en", "bn")
   }
 
   signingConfigs {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD") ?: "android"
+      storePassword = System.getenv("STORE_PASSWORD")
       keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+      keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -119,10 +118,7 @@ android {
         "META-INF/NOTICE.txt",
         "META-INF/notice.txt",
         "META-INF/ASL2.0",
-        "META-INF/*.kotlin_module",
-        "META-INF/INDEX.LIST",
-        "META-INF/io.netty.versions.properties",
-        "google/**/*.proto"
+        "META-INF/*.kotlin_module"
       )
     }
   }
@@ -181,7 +177,7 @@ dependencies {
   // implementation("androidx.media3:media3-exoplayer-rtsp:1.5.1")
   // implementation(libs.converter.moshi)
   implementation(platform(libs.firebase.bom))
-  // implementation(libs.firebase.firestore)
+  implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)

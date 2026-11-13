@@ -47,10 +47,8 @@ import java.util.concurrent.TimeUnit
 
 class MediaRepository(private val context: Context) {
 
-    private val appContext: Context = context.applicationContext
-
     private val prefs: SharedPreferences =
-        appContext.getSharedPreferences("nafitv_prefs", Context.MODE_PRIVATE)
+        context.getSharedPreferences("nafitv_prefs", Context.MODE_PRIVATE)
 
     private val client: OkHttpClient = NafiTvApp.sharedOkHttpClient
 
@@ -64,13 +62,13 @@ class MediaRepository(private val context: Context) {
     private val seriesDetailsCache = ConcurrentHashMap<String, MediaItem>()
 
     val dexPluginManager: com.example.cloudstream.DexPluginManager =
-        com.example.cloudstream.DexPluginManager(appContext, client)
+        com.example.cloudstream.DexPluginManager(context, client)
 
     val nativeScraperEngine: com.example.cloudstream.NativeScraperEngine =
         com.example.cloudstream.NativeScraperEngine(client)
 
     val authManager: FirebaseAuthManager =
-        FirebaseAuthManager(appContext, client)
+        FirebaseAuthManager(context, client)
 
     suspend fun getRtdbAuthQuery(): String {
         val token = authManager.getValidIdToken()

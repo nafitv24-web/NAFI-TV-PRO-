@@ -1176,28 +1176,28 @@ fun VideoPlayerScreen(
         val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         val isLowRamDevice = actManager?.isLowRamDevice == true || (Runtime.getRuntime().maxMemory() / (1024 * 1024)) <= 128
 
-        // Lightning-Fast Channel Startup LoadControl:
-        // - bufferForPlaybackMs = 100L: Starts playing INSTANTLY upon receiving the first packet!
-        // - bufferForPlaybackAfterRebufferMs = 250L: Instant recovery if any network jitter occurs
-        // - minBufferMs = 5000L for live streams: Minimizes initial wait time to <0.5s while maintaining stability
-        // - maxBufferMs = 15000L: Prevents excess RAM usage, keeping app ultra-fast and lag-free
+        // Zero-Buffering & Instant Playback LoadControl:
+        // - bufferForPlaybackMs = 200L: Starts playing INSTANTLY the moment the channel is clicked!
+        // - bufferForPlaybackAfterRebufferMs = 400L: Instant recovery if any network hiccup occurs
+        // - minBufferMs = 25000L / 35000L: Massive 25-35 second safety cushion preventing periodic freezes or stalls
+        // - maxBufferMs = 60000L / 90000L: Builds a deep continuous buffer in background while user watches smoothly
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setAllocator(androidx.media3.exoplayer.upstream.DefaultAllocator(true, if (isLowRamDevice) 32 * 1024 else 64 * 1024))
             .setBufferDurationsMs(
-                /* minBufferMs = */ if (isLiveStream) 5000 else if (isLowRamDevice) 6000 else 15000,
-                /* maxBufferMs = */ if (isLiveStream) 15000 else if (isLowRamDevice) 18000 else 45000,
-                /* bufferForPlaybackMs = */ 100,
-                /* bufferForPlaybackAfterRebufferMs = */ 250
+                /* minBufferMs = */ if (isLiveStream) 25000 else if (isLowRamDevice) 15000 else 35000,
+                /* maxBufferMs = */ if (isLiveStream) 60000 else if (isLowRamDevice) 30000 else 90000,
+                /* bufferForPlaybackMs = */ 200,
+                /* bufferForPlaybackAfterRebufferMs = */ 400
             )
             .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(3000, true)
+            .setBackBuffer(10000, true)
             .setTargetBufferBytes(
                 if (isLowRamDevice) {
-                    if (isLiveStream) 8 * 1024 * 1024 else 12 * 1024 * 1024
+                    if (isLiveStream) 16 * 1024 * 1024 else 24 * 1024 * 1024
                 } else if (isLiveStream) {
-                    16 * 1024 * 1024
-                } else {
                     32 * 1024 * 1024
+                } else {
+                    64 * 1024 * 1024
                 }
             )
             .build()

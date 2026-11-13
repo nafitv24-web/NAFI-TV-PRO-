@@ -182,9 +182,9 @@ object MediaStreamingClient {
         try {
             OkHttpClient.Builder()
                 .dns(smartDns)
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(12, TimeUnit.SECONDS)
-                .writeTimeout(8, TimeUnit.SECONDS)
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
                 .callTimeout(0, TimeUnit.MILLISECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
