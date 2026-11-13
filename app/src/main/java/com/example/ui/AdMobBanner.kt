@@ -64,7 +64,7 @@ fun initializeAdMobSafely(context: Context) {
         MobileAds.initialize(context.applicationContext) {
             isMobileAdsInitialized = true
         }
-    } catch (_: Exception) {}
+    } catch (_: Throwable) {}
 }
 
 /**
@@ -85,9 +85,10 @@ fun NonIntrusiveAdMobBanner(
     var isDismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
+        try {
+            kotlinx.coroutines.delay(800)
             initializeAdMobSafely(context)
-        }
+        } catch (_: Throwable) {}
     }
 
     if (isDismissed) return
@@ -155,21 +156,26 @@ fun NonIntrusiveAdMobBanner(
                             .fillMaxWidth()
                             .height(50.dp),
                         factory = { ctx ->
-                            AdView(ctx).apply {
-                                setAdSize(AdSize.BANNER)
-                                this.adUnitId = adUnitId
-                                adListener = object : AdListener() {
-                                    override fun onAdLoaded() {
-                                        super.onAdLoaded()
-                                        isAdLoaded = true
-                                    }
+                            try {
+                                AdView(ctx).apply {
+                                    setAdSize(AdSize.BANNER)
+                                    this.adUnitId = adUnitId
+                                    adListener = object : AdListener() {
+                                        override fun onAdLoaded() {
+                                            super.onAdLoaded()
+                                            isAdLoaded = true
+                                        }
 
-                                    override fun onAdFailedToLoad(loadAdError: LoadAdError) {
-                                        super.onAdFailedToLoad(loadAdError)
-                                        isAdLoaded = false
+                                        override fun onAdFailedToLoad(loadAdError: LoadAdError) {
+                                            super.onAdFailedToLoad(loadAdError)
+                                            isAdLoaded = false
+                                        }
                                     }
+                                    loadAd(AdRequest.Builder().build())
                                 }
-                                loadAd(AdRequest.Builder().build())
+                            } catch (_: Throwable) {
+                                isAdLoaded = false
+                                android.view.View(ctx)
                             }
                         }
                     )

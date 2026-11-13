@@ -36,4 +36,28 @@ class ExampleRobolectricTest {
     val activity = controller.get()
     org.junit.Assert.assertNotNull(activity)
   }
+
+  @Test
+  fun `workmanager auto initializer is removed from initialization provider`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val providerComponent = android.content.ComponentName(
+      context.packageName,
+      "androidx.startup.InitializationProvider"
+    )
+    @Suppress("DEPRECATION")
+    val providerInfo = context.packageManager.getProviderInfo(
+      providerComponent,
+      android.content.pm.PackageManager.GET_META_DATA
+    )
+    val metaKeys = providerInfo.metaData?.keySet().orEmpty()
+    org.junit.Assert.assertFalse(
+      "WorkManagerInitializer must be removed from InitializationProvider metadata",
+      metaKeys.contains("androidx.work.WorkManagerInitializer")
+    )
+    val workManagerResult = runCatching { androidx.work.WorkManager.getInstance(context) }
+    org.junit.Assert.assertTrue(
+      "WorkManager should not be eagerly initialized on startup",
+      workManagerResult.isFailure
+    )
+  }
 }
