@@ -64,7 +64,7 @@ fun initializeAdMobSafely(context: Context) {
         MobileAds.initialize(context.applicationContext) {
             isMobileAdsInitialized = true
         }
-    } catch (_: Exception) {}
+    } catch (_: Throwable) {}
 }
 
 /**
@@ -85,9 +85,11 @@ fun NonIntrusiveAdMobBanner(
     var isDismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            initializeAdMobSafely(context)
-        }
+        try {
+            withContext(Dispatchers.IO) {
+                initializeAdMobSafely(context)
+            }
+        } catch (_: Throwable) {}
     }
 
     if (isDismissed) return

@@ -122,8 +122,7 @@ android {
         "META-INF/*.kotlin_module",
         "META-INF/INDEX.LIST",
         "META-INF/io.netty.versions.properties",
-        "google/**/*.proto",
-        "**/*.proto"
+        "google/**/*.proto"
       )
     }
   }

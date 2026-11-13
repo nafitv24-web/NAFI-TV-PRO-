@@ -29,20 +29,20 @@ class NafiTvApp : Application(), ImageLoaderFactory {
         // 1. Register optimized Coil ImageLoader globally so all AsyncImage instances use low-RAM decode
         try {
             coil.Coil.setImageLoader(newImageLoader())
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w("NafiTvApp", "Coil image loader init error", e)
         }
 
         try {
             com.example.util.SportsInteractionManager.init(this)
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
 
         // Light background maintenance delayed by 4 seconds so UI loads instantaneously like butter
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             try {
                 kotlinx.coroutines.delay(4000)
                 com.example.util.StorageCleaner.cleanOnStartup(this@NafiTvApp)
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
         }
 
         // 2. Global crash protection: Intercepts decoder, GPU, network & memory crashes

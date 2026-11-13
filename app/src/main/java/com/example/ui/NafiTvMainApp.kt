@@ -247,18 +247,20 @@ fun NafiTvMainApp(
     )
 
     LaunchedEffect(Unit) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    android.Manifest.permission.POST_NOTIFICATIONS
-                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
-        }
-        NotificationHelper.initNotificationChannel(context)
-        MovieDownloadManager.init(context)
-        com.example.util.ChannelStatusManager.init(context)
+        } catch (_: Throwable) {}
+        try { NotificationHelper.initNotificationChannel(context) } catch (_: Throwable) {}
+        try { MovieDownloadManager.init(context) } catch (_: Throwable) {}
+        try { com.example.util.ChannelStatusManager.init(context) } catch (_: Throwable) {}
     }
 
     // State lists - Instant 0-millisecond startup initialization from fast memory / built-in defaults (butter-smooth)
