@@ -1,64 +1,34 @@
 # ProGuard / R8 configuration for NAFI TV Pro
-# Safe, high-performance size reduction without breaking entry points or reflection
+# Aggressive size optimization with safe reflection preservation
 
-# Suppress harmless library warnings
+# Suppress harmless third-party library warnings
 -dontwarn **
 -ignorewarnings
 
-# Preserve line numbers and essential reflection attributes
+# Preserve line numbers for stack traces and essential annotations
 -keepattributes SourceFile,LineNumberTable
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# Keep Android Components (Activity, Application, Service, Receiver, Provider)
+# Keep Android Application Components
 -keep public class * extends android.app.Activity
 -keep public class * extends android.app.Application
 -keep public class * extends android.app.Service
 -keep public class * extends android.content.BroadcastReceiver
 -keep public class * extends android.content.ContentProvider
 
-# Keep application entry points and core classes
+# Keep application entry points
 -keep public class com.example.NafiTvApp { *; }
 -keep public class com.example.MainActivity { *; }
--keep class com.example.** { *; }
--keepclassmembers class com.example.** { *; }
 
-# Keep data classes and JSON models
--keepclassmembers class com.example.model.** {
-    <fields>;
-    <init>(...);
+# Keep data models used in JSON serialization/deserialization
+-keep class com.example.model.** { *; }
+-keepclassmembers class com.example.model.** { *; }
+
+# Keep WebView JavaScript interfaces
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
 }
 
-# Keep AndroidX & Jetpack Compose runtime
--keep class androidx.compose.runtime.** { *; }
--keep class androidx.compose.ui.** { *; }
--keep class androidx.lifecycle.** { *; }
--keep class androidx.activity.** { *; }
--keep class androidx.navigation.** { *; }
-
-# Keep Coroutines
--keep class kotlinx.coroutines.** { *; }
--keepclassmembers class kotlinx.coroutines.** { *; }
-
-# Keep Media3 / ExoPlayer
--keep class androidx.media3.** { *; }
--keepclassmembers class androidx.media3.** { *; }
--keep interface androidx.media3.** { *; }
--dontwarn androidx.media3.**
-
-# Keep OkHttp & Coil
--keep class okhttp3.** { *; }
--keep class coil.** { *; }
-
-# Keep Google Play Services Ads / AdMob Lite
--keep class com.google.android.gms.ads.** { *; }
--keepclassmembers class com.google.android.gms.ads.** { *; }
-
-# Keep Firebase & Google Auth
--keepattributes *JavascriptInterface*
--keep class com.google.firebase.** { *; }
--keepclassmembers class com.google.firebase.** { *; }
--keep class androidx.credentials.** { *; }
--keep class com.google.android.libraries.identity.googleid.** { *; }
-
-# Keep CloudStream plugin interfaces
+# Keep CloudStream interfaces if used
 -keep class com.lagradost.cloudstream3.** { *; }
+
