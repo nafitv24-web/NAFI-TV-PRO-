@@ -934,7 +934,7 @@ fun NafiTvMainApp(
                             .fillMaxWidth()
                             .background(Color(0xFF0F172A))
                             .statusBarsPadding()
-                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1175,7 +1175,7 @@ fun NafiTvMainApp(
                     BreakingNewsTickerBar(
                         tickerText = breakingNewsText,
                         isTvMode = true,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp)
                     )
 
                     // Main Content in TV Mode
