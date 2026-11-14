@@ -31,8 +31,10 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -71,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,6 +124,31 @@ data class MovieHubItem(
     val gradientColors: List<Color> = listOf(Color(0xFF1E1B4B), Color(0xFF0F172A)),
     val accentColor: Color = Color(0xFF00E5FF)
 )
+
+internal data class PreparedMoviesSnapshot(
+    val hubId: String,
+    val typeFilter: String,
+    val isAdultHidden: Boolean,
+    val activeSourceMovies: List<MediaItem>,
+    val preparedMovies: List<MediaItem>,
+    val categorizedMovies: List<Pair<String, List<MediaItem>>>,
+    val fullCategorizedMap: Map<String, List<MediaItem>>,
+    val categories: List<String>,
+    val featuredMovies: List<MediaItem>
+)
+
+internal object MoviesTabSessionCache {
+    val hubMoviesCache = java.util.concurrent.ConcurrentHashMap<String, List<MediaItem>>()
+    @Volatile
+    var lastPreparedSnapshot: PreparedMoviesSnapshot? = null
+    val scrollPositions = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
+
+    fun clear() {
+        hubMoviesCache.clear()
+        lastPreparedSnapshot = null
+        scrollPositions.clear()
+    }
+}
 
 /**
  * Strict Gatekeeper: Guarantees that absolutely NO Live TV channel, Sports event,
@@ -176,7 +204,11 @@ fun MoviesTabScreen(
         mutableStateOf(repository?.getLastSelectedMovieHubId() ?: "")
     }
     var isHubLoading by remember { mutableStateOf(false) }
-    val hubMoviesCache = remember { mutableStateMapOf<String, List<MediaItem>>() }
+    val hubMoviesCache = remember {
+        mutableStateMapOf<String, List<MediaItem>>().apply {
+            putAll(MoviesTabSessionCache.hubMoviesCache)
+        }
+    }
     var hubsRefreshTrigger by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
@@ -344,8 +376,10 @@ fun MoviesTabScreen(
     // Load Hub Movies on-demand when user clicks an Xtream Server, Playlist, or OTT Platform Hub
     LaunchedEffect(selectedHub?.id) {
         val hub = selectedHub ?: return@LaunchedEffect
-        val curCached = hubMoviesCache[hub.id]
+        val curCached = hubMoviesCache[hub.id] ?: MoviesTabSessionCache.hubMoviesCache[hub.id]
         if (curCached != null && curCached.isNotEmpty()) {
+            hubMoviesCache[hub.id] = curCached
+            MoviesTabSessionCache.hubMoviesCache[hub.id] = curCached
             isHubLoading = false
             return@LaunchedEffect
         }
@@ -359,6 +393,7 @@ fun MoviesTabScreen(
                 val strictlyPure = diskCached.filter { isPureMovieOrSeries(it) }
                 if (strictlyPure.isNotEmpty()) {
                     hubMoviesCache[hub.id] = strictlyPure
+                    MoviesTabSessionCache.hubMoviesCache[hub.id] = strictlyPure
                     isHubLoading = false
                     return@LaunchedEffect
                 }
@@ -426,6 +461,9 @@ fun MoviesTabScreen(
                     val strictlyPure = hubMoviesList.filter { isPureMovieOrSeries(it) }
                     withContext(Dispatchers.Main) {
                         hubMoviesCache[hub.id] = strictlyPure
+                        if (strictlyPure.isNotEmpty()) {
+                            MoviesTabSessionCache.hubMoviesCache[hub.id] = strictlyPure
+                        }
                         isHubLoading = false
                     }
                 } catch (e: Exception) {
@@ -441,11 +479,25 @@ fun MoviesTabScreen(
 
     // Hub movies are fetched on-demand when user clicks a specific hub or server (smooth & zero-lag)
 
-    // 1. Instant Active Source Movies: initialized immediately so frame 0 is NEVER empty
+    // Restore synchronous session snapshot if returning from VideoPlayerScreen or tab switch
+    val restoredSnapshot = remember(activeHubId, selectedTypeFilter, isAdultHidden) {
+        MoviesTabSessionCache.lastPreparedSnapshot?.takeIf { snap ->
+            snap.hubId == activeHubId &&
+                snap.typeFilter == selectedTypeFilter &&
+                snap.isAdultHidden == isAdultHidden &&
+                snap.activeSourceMovies.isNotEmpty()
+        }
+    }
+
+    // 1. Instant Active Source Movies: initialized immediately from session cache or full movie list (never truncates or drops hub!)
     var activeSourceMovies by remember {
         mutableStateOf(
-            if (movies.isNotEmpty()) movies.take(1500)
-            else repository?.getDefaultBuiltinMovies() ?: emptyList()
+            when {
+                restoredSnapshot != null -> restoredSnapshot.activeSourceMovies
+                activeHubId.isNotBlank() -> MoviesTabSessionCache.hubMoviesCache[activeHubId].orEmpty()
+                movies.isNotEmpty() -> movies
+                else -> repository?.getDefaultBuiltinMovies() ?: emptyList()
+            }
         )
     }
 
@@ -453,7 +505,7 @@ fun MoviesTabScreen(
     LaunchedEffect(selectedHub?.id, hubMoviesCache.toMap(), movies.size, repository) {
         withContext(Dispatchers.Default) {
             val rawList = if (selectedHub != null) {
-                val fromMem = hubMoviesCache[selectedHub.id]
+                val fromMem = hubMoviesCache[selectedHub.id] ?: MoviesTabSessionCache.hubMoviesCache[selectedHub.id]
                 val fromXtream = repository?.getCachedXtreamAccountMovies(selectedHub.id) ?: emptyList()
                 val fromPl = repository?.getCachedPlaylistMovies(selectedHub.id) ?: emptyList()
                 when {
@@ -465,7 +517,8 @@ fun MoviesTabScreen(
             } else {
                 val base = if (movies.isNotEmpty()) movies else repository?.getDefaultBuiltinMovies() ?: emptyList()
                 val allConfigured = repository?.getAllCachedPlaylistAndXtreamMovies() ?: emptyList()
-                (allConfigured + base)
+                val sessionLoadedHubs = MoviesTabSessionCache.hubMoviesCache.values.flatten()
+                (sessionLoadedHubs + allConfigured + base)
             }
             val filtered = rawList.asSequence()
                 .filter { isPureMovieOrSeries(it) }
@@ -474,7 +527,16 @@ fun MoviesTabScreen(
                 .toList()
 
             withContext(Dispatchers.Main) {
-                activeSourceMovies = if (filtered.isNotEmpty()) filtered else repository?.getDefaultBuiltinMovies() ?: emptyList()
+                val resolved = when {
+                    filtered.isNotEmpty() -> filtered
+                    selectedHub != null -> if (isHubLoading) activeSourceMovies else emptyList()
+                    else -> repository?.getDefaultBuiltinMovies() ?: emptyList()
+                }
+                if (resolved.size != activeSourceMovies.size ||
+                    resolved.firstOrNull()?.id != activeSourceMovies.firstOrNull()?.id
+                ) {
+                    activeSourceMovies = resolved
+                }
             }
         }
     }
@@ -491,12 +553,12 @@ fun MoviesTabScreen(
         }
     }
 
-    // Prepared state variables
-    var preparedMovies by remember { mutableStateOf(activeSourceMovies) }
-    var preparedCategorizedMovies by remember { mutableStateOf<List<Pair<String, List<MediaItem>>>>(emptyList()) }
-    var preparedFullCategorizedMap by remember { mutableStateOf<Map<String, List<MediaItem>>>(emptyMap()) }
-    var preparedCategories by remember { mutableStateOf<List<String>>(listOf("All", "ডাউনলোডসমূহ")) }
-    var preparedFeaturedMovies by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    // Prepared state variables (initialized immediately from session snapshot when returning from player)
+    var preparedMovies by remember { mutableStateOf(restoredSnapshot?.preparedMovies ?: activeSourceMovies) }
+    var preparedCategorizedMovies by remember { mutableStateOf(restoredSnapshot?.categorizedMovies ?: emptyList()) }
+    var preparedFullCategorizedMap by remember { mutableStateOf(restoredSnapshot?.fullCategorizedMap ?: emptyMap()) }
+    var preparedCategories by remember { mutableStateOf(restoredSnapshot?.categories ?: listOf("All", "ডাউনলোডসমূহ")) }
+    var preparedFeaturedMovies by remember { mutableStateOf(restoredSnapshot?.featuredMovies ?: emptyList()) }
 
     val priorityList = remember {
         listOf(
@@ -576,12 +638,26 @@ fun MoviesTabScreen(
                 catName to items.take(25)
             }
 
+            val snapshot = PreparedMoviesSnapshot(
+                hubId = activeHubId,
+                typeFilter = selectedTypeFilter,
+                isAdultHidden = isAdultHidden,
+                activeSourceMovies = activeSourceMovies,
+                preparedMovies = typeFiltered,
+                categorizedMovies = homeShelves,
+                fullCategorizedMap = sortedCatPairs.toMap(),
+                categories = allCats,
+                featuredMovies = featured
+            )
             withContext(Dispatchers.Main) {
                 preparedMovies = typeFiltered
                 preparedCategories = allCats
                 preparedCategorizedMovies = homeShelves
-                preparedFullCategorizedMap = sortedCatPairs.toMap()
+                preparedFullCategorizedMap = snapshot.fullCategorizedMap
                 preparedFeaturedMovies = featured
+                if (activeSourceMovies.isNotEmpty()) {
+                    MoviesTabSessionCache.lastPreparedSnapshot = snapshot
+                }
             }
         }
     }
@@ -590,7 +666,7 @@ fun MoviesTabScreen(
     val featuredMovies = preparedFeaturedMovies
     val categorizedMovies = preparedCategorizedMovies
 
-    var debouncedSearchQuery by remember { mutableStateOf("") }
+    var debouncedSearchQuery by remember { mutableStateOf(searchQuery) }
     LaunchedEffect(searchQuery) {
         if (searchQuery.isNotBlank()) {
             kotlinx.coroutines.delay(120)
@@ -746,6 +822,7 @@ fun MoviesTabScreen(
                                         withContext(Dispatchers.Main) {
                                             if (strictlyPure.isNotEmpty()) {
                                                 hubMoviesCache[hub.id] = strictlyPure
+                                                MoviesTabSessionCache.hubMoviesCache[hub.id] = strictlyPure
                                             }
                                             isHubLoading = false
                                         }
@@ -1237,8 +1314,27 @@ fun MoviesTabScreen(
                 // =========================================================
                 // NETFLIX / DISNEY+ HOTSTAR HOME BROWSING VIEW
                 // =========================================================
+                val listScrollKey = "list_${activeHubId}_${selectedTypeFilter}"
+                val savedListPos = remember(listScrollKey) {
+                    MoviesTabSessionCache.scrollPositions[listScrollKey] ?: (0 to 0)
+                }
+                val homeListState = rememberLazyListState(
+                    initialFirstVisibleItemIndex = savedListPos.first,
+                    initialFirstVisibleItemScrollOffset = savedListPos.second
+                )
+                LaunchedEffect(homeListState, listScrollKey) {
+                    snapshotFlow {
+                        homeListState.firstVisibleItemIndex to homeListState.firstVisibleItemScrollOffset
+                    }.collect { pos ->
+                        MoviesTabSessionCache.scrollPositions[listScrollKey] = pos
+                    }
+                }
+
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    state = homeListState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("movies_home_list"),
                     contentPadding = PaddingValues(bottom = 28.dp),
                     verticalArrangement = Arrangement.spacedBy(if (isCompactTvLayout) 10.dp else 16.dp)
                 ) {
@@ -1566,7 +1662,24 @@ fun MoviesTabScreen(
                         }
                     }
                 } else {
+                    val gridScrollKey = "grid_${activeHubId}_${selectedCategory}_${selectedTypeFilter}_${debouncedSearchQuery}"
+                    val savedGridPos = remember(gridScrollKey) {
+                        MoviesTabSessionCache.scrollPositions[gridScrollKey] ?: (0 to 0)
+                    }
+                    val moviesGridState = rememberLazyGridState(
+                        initialFirstVisibleItemIndex = savedGridPos.first,
+                        initialFirstVisibleItemScrollOffset = savedGridPos.second
+                    )
+                    LaunchedEffect(moviesGridState, gridScrollKey) {
+                        snapshotFlow {
+                            moviesGridState.firstVisibleItemIndex to moviesGridState.firstVisibleItemScrollOffset
+                        }.collect { pos ->
+                            MoviesTabSessionCache.scrollPositions[gridScrollKey] = pos
+                        }
+                    }
+
                     LazyVerticalGrid(
+                        state = moviesGridState,
                         columns = GridCells.Adaptive(minSize = if (isCompactTvLayout) 122.dp else 112.dp),
                         contentPadding = PaddingValues(horizontal = if (isTvMode) 14.dp else 10.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(if (isTvMode) 12.dp else 8.dp),

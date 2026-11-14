@@ -179,8 +179,10 @@ fun NafiTvMainApp(
     }
     var isTvMode by remember { mutableStateOf(effectiveIsTv) }
 
-    LaunchedEffect(effectiveIsTv) {
-        isTvMode = effectiveIsTv
+    LaunchedEffect(effectiveIsTv, selectedMediaItem) {
+        if (selectedMediaItem == null) {
+            isTvMode = effectiveIsTv
+        }
     }
     var isAdminViewActive by remember { mutableStateOf(false) }
     var activeMovieBrowserProvider by remember { mutableStateOf<MovieProvider?>(null) }
@@ -1342,6 +1344,7 @@ fun NafiTvMainApp(
                                 onCustomAdded = handleAddCustomMedia,
                                 onResetDefaults = {
                                     repository.resetToDefaults()
+                                    MoviesTabSessionCache.clear()
                                     sportsList = repository.getInitialSports()
                                     liveTvList = repository.getInitialLiveTv()
                                     moviesList = repository.getInitialMoviesSeries()
@@ -1801,6 +1804,7 @@ fun NafiTvMainApp(
                             onCustomAdded = handleAddCustomMedia,
                             onResetDefaults = {
                                 repository.resetToDefaults()
+                                MoviesTabSessionCache.clear()
                                 sportsList = repository.getInitialSports()
                                 liveTvList = repository.getInitialLiveTv()
                                 moviesList = repository.getInitialMoviesSeries()
