@@ -288,6 +288,7 @@ fun NafiTvMainApp(
     var isRefreshing by remember { mutableStateOf(true) }
     var currentLoadingStage by remember { mutableStateOf(LoadingStage.IDLE) }
     var lastSyncedLiveTvUrl by remember { mutableStateOf(repository.getSavedLiveTvM3uUrl()) }
+    var activeRefreshJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     fun checkForUpdates(isManualCheck: Boolean = false) {
         coroutineScope.launch {
@@ -313,7 +314,8 @@ fun NafiTvMainApp(
 
     // Auto-fetch data: Sequential Staged Loading (1. Live TV -> 2. Live Events -> 3. Movies -> 4. Playlists & Cloud)
     fun refreshAllData() {
-        coroutineScope.launch(Dispatchers.IO) {
+        activeRefreshJob?.cancel()
+        activeRefreshJob = coroutineScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) {
                 isRefreshing = true
                 currentLoadingStage = LoadingStage.LIVE_TV
@@ -407,7 +409,7 @@ fun NafiTvMainApp(
                             val launchedLiveTvUrls = java.util.Collections.synchronizedSet(HashSet<String>())
                             suspend fun fetchAndEmitAdminLiveUrl(singleUrl: String) {
                                 if (!launchedLiveTvUrls.add(singleUrl)) return
-                                val items = kotlinx.coroutines.withTimeoutOrNull(22000L) {
+                                val items = kotlinx.coroutines.withTimeoutOrNull(40000L) {
                                     try {
                                         repository.fetchSingleLiveTvSourceUrlFast(singleUrl)
                                             .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
@@ -429,7 +431,7 @@ fun NafiTvMainApp(
                             }
 
                             val xtreamLiveJob = async {
-                                val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
+                                val items = kotlinx.coroutines.withTimeoutOrNull(25000L) {
                                     try {
                                         repository.fetchAllXtreamLiveChannels()
                                             .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }

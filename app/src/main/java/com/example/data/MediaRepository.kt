@@ -689,9 +689,9 @@ class MediaRepository(private val context: Context) {
         return obj
     }
 
-    // Fast & Safe Local File Cache (Stored in context.cacheDir/media_cache, capped to 400 items, zero memory bloat)
-    private fun saveListToFileCache(fileName: String, list: List<MediaItem>) {
-        val itemsToSave = list.take(400) // Keep disk cache footprint minimal (< 200KB per file)
+    // Fast & Safe Local File Cache (Stored in context.cacheDir/media_cache)
+    private fun saveListToFileCache(fileName: String, list: List<MediaItem>, maxDiskItems: Int = 400) {
+        val itemsToSave = list.take(maxDiskItems)
         memoryFileCache[fileName] = list
         cacheWriteExecutor.execute {
             try {
@@ -850,7 +850,7 @@ class MediaRepository(private val context: Context) {
     }
 
     fun saveCachedLiveTvChannels(list: List<MediaItem>) {
-        saveListToFileCache("cache_livetv_v4.json", list.filterNot { isDemoChannel(it) })
+        saveListToFileCache("cache_livetv_v4.json", list.filterNot { isDemoChannel(it) }, maxDiskItems = 5000)
     }
 
     fun saveCachedMoviesList(list: List<MediaItem>) {
@@ -1258,7 +1258,14 @@ class MediaRepository(private val context: Context) {
         val result = ArrayList<MediaItem>(fetched.size)
         for (item in fetched) {
             if (deleted.contains(item.id) || isItemDeleted(item) || isDemoChannel(item)) continue
-            if (isVodMediaItem(item)) continue
+            val cleanPath = item.streamUrl.trim().lowercase().substringBefore('?')
+            val isExplicitVodFile = cleanPath.endsWith(".mp4") ||
+                cleanPath.endsWith(".mkv") ||
+                cleanPath.endsWith(".avi") ||
+                cleanPath.endsWith(".mov") ||
+                cleanPath.endsWith(".webm") ||
+                cleanPath.endsWith(".m4v")
+            if (isExplicitVodFile) continue
             result.add(item.copy(type = MediaType.LIVE_TV, isLive = true))
         }
         result
@@ -1488,24 +1495,25 @@ class MediaRepository(private val context: Context) {
 
     fun extractUrls(input: String): List<String> {
         if (input.isBlank()) return emptyList()
-        val lines = input.lines().map { it.trim() }.filter { it.isNotBlank() }
-        val result = mutableListOf<String>()
-        for (line in lines) {
-            if (line.startsWith("http://", ignoreCase = true) || line.startsWith("https://", ignoreCase = true)) {
-                val clean = line.replace(" ", "%20")
-                result.add(clean)
-            } else {
-                val urlRegex = Regex("""https?://[^\s,;'"<>]+""", RegexOption.IGNORE_CASE)
-                urlRegex.findAll(line).forEach { m ->
-                    result.add(m.value.trim().replace(" ", "%20"))
+        val result = linkedSetOf<String>()
+        val rawSegments = input.split(Regex("[\r\n,;]+"))
+        for (segment in rawSegments) {
+            val trimmed = segment.trim()
+            if (trimmed.isEmpty()) continue
+            val subUrls = trimmed.split(Regex("\\s+(?=https?://)", RegexOption.IGNORE_CASE))
+            for (candidate in subUrls) {
+                val urlToken = candidate.trim()
+                if (urlToken.startsWith("http://", ignoreCase = true) || urlToken.startsWith("https://", ignoreCase = true)) {
+                    result.add(urlToken.replace(" ", "%20"))
+                } else {
+                    val urlRegex = Regex("""https?://[^\s,;'"<>]+""", RegexOption.IGNORE_CASE)
+                    urlRegex.findAll(urlToken).forEach { m ->
+                        result.add(m.value.trim().replace(" ", "%20"))
+                    }
                 }
             }
         }
-        if (result.isNotEmpty()) return result.distinct()
-        return input.split(Regex("[\r\n,;]+"))
-            .map { it.trim().replace(" ", "%20") }
-            .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
-            .distinct()
+        return result.toList()
     }
 
     suspend fun fetchMoviesFromJsonUrl(url: String = DEFAULT_MOVIES_JSON_URL): List<MediaItem> = withContext(Dispatchers.IO) {
@@ -2009,8 +2017,23 @@ class MediaRepository(private val context: Context) {
                         currentCustomHeaders[propKey] = propVal
                     }
                 }
-            } else if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
-                if (items.size >= 6000) break
+            } else if (trimmed.startsWith("#EXTGRP:", ignoreCase = true)) {
+                val grp = trimmed.substringAfter(":").trim()
+                if (grp.isNotEmpty()) {
+                    currentGroup = grp
+                }
+            } else if (
+                trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true) ||
+                trimmed.startsWith("rtsp://", ignoreCase = true) ||
+                trimmed.startsWith("rtmp://", ignoreCase = true) ||
+                trimmed.startsWith("udp://", ignoreCase = true) ||
+                trimmed.startsWith("rtp://", ignoreCase = true) ||
+                trimmed.startsWith("mms://", ignoreCase = true) ||
+                trimmed.startsWith("mmsh://", ignoreCase = true) ||
+                trimmed.startsWith("srt://", ignoreCase = true)
+            ) {
+                if (items.size >= 12000) break
                 var streamUrl = trimmed
                 val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
                     rawUrl = streamUrl,
@@ -2227,6 +2250,7 @@ class MediaRepository(private val context: Context) {
                         manifestType = currentManifestType
                     )
                 )
+                currentId++
 
                 currentTitle = ""
                 currentTvgId = null
@@ -5136,7 +5160,7 @@ class MediaRepository(private val context: Context) {
 
                     items.add(
                         MediaItem(
-                            id = "xtream_live_${streamId}",
+                            id = "xtream_live_${Math.abs(cleanServer.hashCode())}_${streamId}",
                             title = name,
                             category = categoryName,
                             type = MediaType.LIVE_TV,
@@ -5177,7 +5201,7 @@ class MediaRepository(private val context: Context) {
             val results = jobs.awaitAll()
             results.forEach { allItems.addAll(it) }
         }
-        allItems.distinctBy { it.id }
+        mergeLiveTvChannelsFast(allItems)
     }
 
     suspend fun fetchStarshareMoviesAndSeries(): List<MediaItem> = withContext(Dispatchers.IO) {
@@ -5879,9 +5903,7 @@ class MediaRepository(private val context: Context) {
         val urls = linkedSetOf<String>()
         urls.add(updateChannelUrl)
         if (current.isNotBlank()) {
-            current.split(Regex("[\r\n,;]+"))
-                .map { it.trim() }
-                .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+            extractUrls(current)
                 .filterNot { it.contains("Sports%20Channel%20NF.m3u") || it.contains("Nafitv24.m3u", ignoreCase = true) }
                 .forEach { urls.add(it) }
         }
@@ -6680,16 +6702,26 @@ class MediaRepository(private val context: Context) {
         var remoteTapmadJson: String? = null
 
         coroutineScope {
+            data class ConfigCandidate(
+                val liveTv: String?,
+                val sports: String?,
+                val movies: String?,
+                val tapmad: String?,
+                val updatedAt: Long,
+                val priority: Int
+            )
+
             // 1. Fetch from Firestore in parallel (all databases & document paths in 1 round-trip)
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
             val docPaths = listOf("settings/app_config", "app_config/global_config")
-            val fsJobs = databases.map { dbId ->
-                docPaths.map { docPath ->
+            val fsJobs = databases.mapIndexed { dbIdx, dbId ->
+                docPaths.mapIndexed { pathIdx, docPath ->
                     async {
                         var fsLiveTv: String? = null
                         var fsSports: String? = null
                         var fsMovies: String? = null
                         var fsTapmad: String? = null
+                        var updatedAt = 0L
                         try {
                             val (ok, body) = executeFirestoreRequest(dbId, docPath, "GET")
                             if (ok && body.isNotBlank() && body.startsWith("{")) {
@@ -6700,6 +6732,7 @@ class MediaRepository(private val context: Context) {
                                     val sp = fields.optJSONObject("sportsM3uUrl")?.optString("stringValue")
                                     val mov = fields.optJSONObject("moviesM3uUrl")?.optString("stringValue")
                                     val tap = fields.optJSONObject("tapmadJsonUrl")?.optString("stringValue")
+                                    updatedAt = fields.optJSONObject("updated_at")?.optString("integerValue")?.toLongOrNull() ?: 0L
 
                                     if (!ltv.isNullOrBlank()) fsLiveTv = ltv
                                     if (!sp.isNullOrBlank()) fsSports = sp
@@ -6710,7 +6743,8 @@ class MediaRepository(private val context: Context) {
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
-                        listOf(fsLiveTv, fsSports, fsMovies, fsTapmad)
+                        val priority = (databases.size - dbIdx) * 10 + (docPaths.size - pathIdx)
+                        ConfigCandidate(fsLiveTv, fsSports, fsMovies, fsTapmad, updatedAt, priority)
                     }
                 }
             }.flatten()
@@ -6721,6 +6755,7 @@ class MediaRepository(private val context: Context) {
                 var rtdbSports: String? = null
                 var rtdbMovies: String? = null
                 var rtdbTapmad: String? = null
+                var updatedAt = 0L
                 if (url.isNotBlank()) {
                     try {
                         val cleanUrl = if (url.endsWith("/")) url.removeSuffix("/") else url
@@ -6731,28 +6766,24 @@ class MediaRepository(private val context: Context) {
                             if (obj.has("sportsM3uUrl")) rtdbSports = obj.optString("sportsM3uUrl")
                             if (obj.has("moviesM3uUrl")) rtdbMovies = obj.optString("moviesM3uUrl")
                             if (obj.has("tapmadJsonUrl")) rtdbTapmad = obj.optString("tapmadJsonUrl")
+                            updatedAt = obj.optLong("updated_at", 0L)
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
                 }
-                listOf(rtdbLiveTv, rtdbSports, rtdbMovies, rtdbTapmad)
+                ConfigCandidate(rtdbLiveTv, rtdbSports, rtdbMovies, rtdbTapmad, updatedAt, 0)
             }
 
-            val fsResults = fsJobs.awaitAll()
-            val rtdbResult = rtdbJob.await()
+            val allCandidates = (fsJobs.awaitAll() + rtdbJob.await())
+                .sortedWith(compareByDescending<ConfigCandidate> { it.updatedAt }.thenByDescending { it.priority })
 
-            for (res in fsResults) {
-                if (!res[0].isNullOrBlank()) remoteLiveTv = res[0]
-                if (!res[1].isNullOrBlank()) remoteSports = res[1]
-                if (!res[2].isNullOrBlank()) remoteMovies = res[2]
-                if (!res[3].isNullOrBlank()) remoteTapmadJson = res[3]
+            for (c in allCandidates) {
+                if (remoteLiveTv.isNullOrBlank() && !c.liveTv.isNullOrBlank()) remoteLiveTv = c.liveTv
+                if (remoteSports.isNullOrBlank() && !c.sports.isNullOrBlank()) remoteSports = c.sports
+                if (remoteMovies.isNullOrBlank() && !c.movies.isNullOrBlank()) remoteMovies = c.movies
+                if (remoteTapmadJson.isNullOrBlank() && !c.tapmad.isNullOrBlank()) remoteTapmadJson = c.tapmad
             }
-            // Only fallback to RTDB if Firestore is blank
-            if (remoteLiveTv.isNullOrBlank() && !rtdbResult[0].isNullOrBlank()) remoteLiveTv = rtdbResult[0]
-            if (remoteSports.isNullOrBlank() && !rtdbResult[1].isNullOrBlank()) remoteSports = rtdbResult[1]
-            if (remoteMovies.isNullOrBlank() && !rtdbResult[2].isNullOrBlank()) remoteMovies = rtdbResult[2]
-            if (remoteTapmadJson.isNullOrBlank() && !rtdbResult[3].isNullOrBlank()) remoteTapmadJson = rtdbResult[3]
         }
 
         if (remoteLiveTv != null || remoteSports != null || remoteMovies != null || remoteTapmadJson != null) {
@@ -9750,18 +9781,13 @@ class MediaRepository(private val context: Context) {
         prefs.edit().putStringSet("admin_hidden_keywords", current).apply()
     }
 
+    private val adultKeywordRegex = Regex(
+        """(?i)(?:\b(?:adult|adults|xxx|nsfw|erotic|erotica|porn|sex|sensual|mature|ullu|kooku|primeshots|besharams|hotx|chikoo|boomx|cinemadosti|cinema\s+dosti|redprime|gupchup|feneo|fliz|voovi|feelit|unrated\s+hot|softcore|nuefliks|hotshots|for\s+adults?|brazzers|playboy|hustler|penthouse|dorcel|centoxcento|blue\s+hustler|playflix)\b|18\s*\+)"""
+    )
+
     fun isAdultCategory(categoryName: String?): Boolean {
         if (categoryName.isNullOrBlank()) return false
-        val lower = categoryName.lowercase().trim()
-        val adultWords = listOf(
-            "adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "erotica", "porn", "sex", "sensual",
-            "mature", "ullu", "kooku", "primeshots", "rabbit", "besharams", "hotx", "chikoo",
-            "boomx", "cinemadosti", "cinema dosti", "redprime", "gupchup", "hunt", "feneo",
-            "fliz", "voovi", "feelit", "unrated hot", "softcore", "nuefliks", "hotshots",
-            "for adults", "for adult", "brazzers", "playboy", "hustler", "penthouse", "dorcel",
-            "centoxcento", "blue hustler", "playflix", "bold"
-        )
-        return adultWords.any { lower.contains(it) }
+        return adultKeywordRegex.containsMatchIn(categoryName)
     }
 
     fun isMediaHidden(item: MediaItem): Boolean {
@@ -9778,18 +9804,8 @@ class MediaRepository(private val context: Context) {
 
     fun isAdultMedia(item: MediaItem): Boolean {
         if (isAdultCategory(item.category)) return true
-        val adultKeywords = listOf(
-            "adult", "adults", "18+", "18 +", "xxx", "nsfw", "erotic", "erotica", "porn", "sex", "sensual",
-            "mature", "ullu", "kooku", "primeshots", "rabbit", "besharams", "hotx", "chikoo",
-            "boomx", "cinemadosti", "cinema dosti", "redprime", "gupchup", "hunt", "feneo",
-            "fliz", "voovi", "feelit", "unrated hot", "softcore", "nuefliks", "hotshots",
-            "for adults", "for adult", "brazzers", "playboy", "hustler", "penthouse", "dorcel",
-            "centoxcento", "blue hustler", "playflix", "bold"
-        )
-        val textToScan = "${item.title} ${item.category} ${item.genre ?: ""} ${item.description ?: ""}".lowercase()
-        return adultKeywords.any { keyword ->
-            textToScan.contains(keyword)
-        }
+        val textToScan = "${item.title} ${item.category} ${item.genre ?: ""} ${item.description ?: ""}"
+        return adultKeywordRegex.containsMatchIn(textToScan)
     }
 
     // -------------------------------------------------------------

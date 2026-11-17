@@ -109,10 +109,11 @@ class LiveTvPlaylistUnificationTest {
     }
 
     @Test
-    fun `getSavedLiveTvM3uUrl keeps multiple Admin Live TV URLs while filtering legacy broken entries`() {
+    fun `getSavedLiveTvM3uUrl and extractUrls parse newline comma semicolon and space separated URLs`() {
         val adminInput = listOf(
             "https://example.com/Nafitv24.m3u",
-            "https://example.com/bd_channels.m3u",
+            "https://example.com/bd_channels.m3u, https://example.com/comma_space.m3u",
+            "https://example.com/space_one.m3u https://example.com/space_two.m3u",
             "https://example.com/sports_tv.m3u;https://example.com/news_tv.m3u|User-Agent=CustomAgent",
             "https://example.com/Sports%20Channel%20NF.m3u"
         ).joinToString("\n")
@@ -120,11 +121,37 @@ class LiveTvPlaylistUnificationTest {
         repository.saveLiveTvM3uUrl(adminInput)
         val extracted = repository.extractUrls(repository.getSavedLiveTvM3uUrl())
 
-        assertTrue(extracted.any { it.contains("bd_channels.m3u") })
-        assertTrue(extracted.any { it.contains("sports_tv.m3u") })
-        assertTrue(extracted.any { it.contains("news_tv.m3u|User-Agent=CustomAgent") })
+        assertTrue(extracted.contains("https://example.com/bd_channels.m3u"))
+        assertTrue(extracted.contains("https://example.com/comma_space.m3u"))
+        assertTrue(extracted.contains("https://example.com/space_one.m3u"))
+        assertTrue(extracted.contains("https://example.com/space_two.m3u"))
+        assertTrue(extracted.contains("https://example.com/sports_tv.m3u"))
+        assertTrue(extracted.contains("https://example.com/news_tv.m3u|User-Agent=CustomAgent"))
         assertFalse(extracted.any { it.contains("Nafitv24.m3u", ignoreCase = true) })
         assertFalse(extracted.any { it.contains("Sports%20Channel%20NF.m3u") })
+    }
+
+    @Test
+    fun `adult filter does not hide normal Live TV channels like Hunter or Sussex`() {
+        val hunter = MediaItem(
+            id = "tv_hunter",
+            title = "Hunter TV",
+            category = "Documentary",
+            type = MediaType.LIVE_TV,
+            streamUrl = "https://cdn.example.com/hunter.m3u8",
+            isLive = true
+        )
+        val adult = MediaItem(
+            id = "tv_adult",
+            title = "18+ Adult Channel",
+            category = "Adults Only",
+            type = MediaType.LIVE_TV,
+            streamUrl = "https://cdn.example.com/adult.m3u8",
+            isLive = true
+        )
+
+        assertFalse(repository.isAdultMedia(hunter))
+        assertTrue(repository.isAdultMedia(adult))
     }
 
     @Test
