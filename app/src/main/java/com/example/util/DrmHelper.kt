@@ -120,11 +120,22 @@ object DrmHelper {
             }
         }
 
-        // Auto-detect manifest type if not set
+        // Auto-detect manifest type if not set (strict checks so domains like "bangladesh" never match "dash")
         if (manifestType.isNullOrBlank()) {
+            val pathLower = cleanUrl.substringBefore('?').lowercase()
+            val fullLower = cleanUrl.lowercase()
             manifestType = when {
-                cleanUrl.contains(".mpd", ignoreCase = true) || cleanUrl.contains("dash", ignoreCase = true) -> "mpd"
-                cleanUrl.contains(".m3u8", ignoreCase = true) || cleanUrl.contains("hls", ignoreCase = true) -> "hls"
+                pathLower.endsWith(".mpd") ||
+                        fullLower.contains(".mpd?") ||
+                        fullLower.contains("/dash/") ||
+                        fullLower.contains("format=mpd") ||
+                        fullLower.contains("type=dash") -> "mpd"
+                pathLower.endsWith(".m3u8") ||
+                        fullLower.contains(".m3u8?") ||
+                        fullLower.contains("/hls/") ||
+                        fullLower.contains("output=m3u8") ||
+                        fullLower.contains("extension=m3u8") ||
+                        fullLower.contains("format=hls") -> "hls"
                 else -> null
             }
         }

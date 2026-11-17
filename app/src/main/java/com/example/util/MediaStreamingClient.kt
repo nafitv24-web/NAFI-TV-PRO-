@@ -105,15 +105,39 @@ object MediaStreamingClient {
         }
     }
 
+    private val cookieStore = ConcurrentHashMap<String, List<okhttp3.Cookie>>()
+
+    private val sessionCookieJar = object : okhttp3.CookieJar {
+        override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
+            if (cookies.isNotEmpty()) {
+                val valid = cookies.filter { it.expiresAt > System.currentTimeMillis() }
+                if (valid.isNotEmpty()) {
+                    cookieStore[url.host] = valid
+                }
+            }
+        }
+
+        override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> {
+            val now = System.currentTimeMillis()
+            return cookieStore[url.host]?.filter { it.expiresAt > now }.orEmpty()
+        }
+    }
+
     /**
      * Auto-healing interceptor:
-     * 1. If an IPTV redirect URL hits a 404 node (such as an un-routed edge server in growthtry.com),
-     *    automatically switches to the healthy edge IP node and retries instantly.
-     * 2. If a server blocks with 403 Forbidden or 401 Unauthorized due to user-agent rejection
-     *    (common on Akamai/Cloudflare/Xtream servers), automatically retries with Network Stream Player / VLC user agent.
+     * 1. Ensures Accept-Encoding: identity on streaming URLs so reverse proxies never gzip-buffer live TS/media streams.
+     * 2. Records HTTP Content-Type / final redirected URL hints so ExoPlayer handles .ts -> .m3u8 redirects cleanly.
+     * 3. Handles growthtry 404 edge node recovery and retries blocked User-Agents cleanly.
      */
     private val streamHealingInterceptor = Interceptor { chain ->
-        val originalRequest = chain.request()
+        val rawRequest = chain.request()
+        val originalRequest = if (rawRequest.header("Accept-Encoding") == null) {
+            rawRequest.newBuilder().header("Accept-Encoding", "identity").build()
+        } else {
+            rawRequest
+        }
+        val reqUrlStr = originalRequest.url.toString()
+        val reqUrlLower = reqUrlStr.lowercase()
         var response = chain.proceed(originalRequest)
 
         // 1. Edge Node Healing (Growthtry / Xtream unrouted 404)
@@ -129,38 +153,58 @@ object MediaStreamingClient {
             return@Interceptor chain.proceed(fallbackRequest)
         }
 
-        // 2. UA Rejection Auto-Retry (403/401/405/406/407/461 on CDN & Stalker live streams)
-        val isStreamingUrl = originalRequest.url.toString().contains("/live/") ||
-                originalRequest.url.toString().contains("/play/live.php") ||
-                originalRequest.url.toString().contains("mac=") ||
-                originalRequest.url.toString().contains(".m3u8") ||
-                originalRequest.url.toString().contains(".ts")
+        // 2. UA Rejection Auto-Retry (on IPTV live TS, HLS, DASH, Stalker, VOD streams)
+        val isStreamingUrl = reqUrlLower.contains("/live/") ||
+            reqUrlLower.contains("/movie/") ||
+            reqUrlLower.contains("/series/") ||
+            reqUrlLower.contains("/hls/") ||
+            reqUrlLower.contains("/stream") ||
+            reqUrlLower.contains("/play/live.php") ||
+            reqUrlLower.contains("mac=") ||
+            reqUrlLower.contains(".m3u8") ||
+            reqUrlLower.contains(".mpd") ||
+            reqUrlLower.contains(".ts") ||
+            reqUrlLower.contains(".mp4") ||
+            reqUrlLower.contains(".mkv") ||
+            reqUrlLower.contains(".flv") ||
+            reqUrlLower.contains("output=") ||
+            reqUrlLower.contains("extension=")
 
-        if ((response.code in listOf(400, 401, 403, 405, 406, 407, 461, 503)) && isStreamingUrl) {
+        val shouldRetryAuthOrBlock = response.code in listOf(400, 401, 403, 405, 406, 407, 429, 451, 461, 502, 503)
+        val shouldRetryNotFoundOnce = response.code == 404
+
+        if ((shouldRetryAuthOrBlock || shouldRetryNotFoundOnce) && isStreamingUrl) {
             val currentUa = originalRequest.header("User-Agent").orEmpty()
             val stalkerUa = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
-            val allFallbackUas = listOf(stalkerUa) + fallbackUserAgents
+            val candidateUas = if (shouldRetryNotFoundOnce) {
+                listOf(USER_AGENT_VLC, USER_AGENT_LAVF)
+            } else {
+                listOf(stalkerUa) + fallbackUserAgents + listOf("TiviMate/4.7.0 (Android TV)")
+            }
 
-            for (altUa in allFallbackUas) {
+            for (altUa in candidateUas) {
                 if (!altUa.equals(currentUa, ignoreCase = true)) {
                     response.close()
                     val retryRequestBuilder = originalRequest.newBuilder()
                         .header("User-Agent", altUa)
 
                     // Stalker & CDN Proxy healing
-                    if (originalRequest.url.toString().contains("mac=") || originalRequest.url.toString().contains("tivi-one")) {
+                    if (reqUrlLower.contains("mac=") || reqUrlLower.contains("tivi-one")) {
                         retryRequestBuilder.header("X-User-Agent", "Model: MAG250; Link: Ethernet")
                         retryRequestBuilder.removeHeader("Referer")
                         retryRequestBuilder.removeHeader("Origin")
-                        val mac = try { android.net.Uri.parse(originalRequest.url.toString()).getQueryParameter("mac") } catch (_: Exception) { null }
+                        val mac = try { android.net.Uri.parse(reqUrlStr).getQueryParameter("mac") } catch (_: Exception) { null }
                         if (!mac.isNullOrBlank()) {
                             retryRequestBuilder.header("Cookie", "mac=$mac; stb_lang=en; timezone=Europe/Kiev;")
                         }
                     }
 
-                    // Akamai / Cloudflare often require stripping Referer/Origin on direct player requests
+                    // Akamai / Cloudflare / Xtream panels often block unexpected browser Referer/Origin on direct streams
                     if (originalRequest.url.host.contains("akamaized.net", ignoreCase = true) ||
-                        originalRequest.url.host.contains("workers.dev", ignoreCase = true)) {
+                        originalRequest.url.host.contains("workers.dev", ignoreCase = true) ||
+                        reqUrlLower.contains("/live/") ||
+                        reqUrlLower.contains(".ts")
+                    ) {
                         retryRequestBuilder.removeHeader("Referer")
                         retryRequestBuilder.removeHeader("Origin")
                     }
@@ -168,6 +212,7 @@ object MediaStreamingClient {
                     val retryRequest = retryRequestBuilder.build()
                     val retryResp = chain.proceed(retryRequest)
                     if (retryResp.isSuccessful || retryResp.code in 200..308) {
+                        recordFormatHintFromResponse(reqUrlStr, retryResp)
                         return@Interceptor retryResp
                     }
                     response = retryResp
@@ -175,16 +220,40 @@ object MediaStreamingClient {
             }
         }
 
+        if (response.isSuccessful) {
+            recordFormatHintFromResponse(reqUrlStr, response)
+        }
         response
+    }
+
+    private fun recordFormatHintFromResponse(originalUrl: String, response: okhttp3.Response) {
+        try {
+            val finalUrl = response.request.url.toString().lowercase()
+            val contentType = response.header("Content-Type")?.lowercase().orEmpty()
+            val hint = when {
+                contentType.contains("mpegurl") ||
+                    contentType.contains("vnd.apple") ||
+                    finalUrl.substringBefore('?').endsWith(".m3u8") -> androidx.media3.common.MimeTypes.APPLICATION_M3U8
+                contentType.contains("dash+xml") ||
+                    finalUrl.substringBefore('?').endsWith(".mpd") -> androidx.media3.common.MimeTypes.APPLICATION_MPD
+                contentType.contains("mp2t") -> androidx.media3.common.MimeTypes.VIDEO_MP2T
+                else -> null
+            }
+            if (hint != null) {
+                StreamPlaybackSupport.recordRuntimeHint(originalUrl, hint)
+                StreamPlaybackSupport.recordRuntimeHint(response.request.url.toString(), hint)
+            }
+        } catch (_: Exception) {}
     }
 
     val streamingOkHttpClient: OkHttpClient by lazy {
         try {
             OkHttpClient.Builder()
                 .dns(smartDns)
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(12, TimeUnit.SECONDS)
-                .writeTimeout(8, TimeUnit.SECONDS)
+                .cookieJar(sessionCookieJar)
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(25, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
                 .callTimeout(0, TimeUnit.MILLISECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
@@ -196,14 +265,15 @@ object MediaStreamingClient {
                         hostnameVerifier { _, _ -> true }
                     } catch (_: Throwable) {}
                 }
-                .connectionPool(ConnectionPool(64, 10, TimeUnit.MINUTES))
+                .connectionPool(ConnectionPool(64, 5, TimeUnit.MINUTES))
                 .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
                 .build()
         } catch (_: Throwable) {
             try {
                 OkHttpClient.Builder()
-                    .connectTimeout(10, TimeUnit.SECONDS)
-                    .readTimeout(20, TimeUnit.SECONDS)
+                    .cookieJar(sessionCookieJar)
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(25, TimeUnit.SECONDS)
                     .followRedirects(true)
                     .retryOnConnectionFailure(true)
                     .build()
@@ -213,15 +283,22 @@ object MediaStreamingClient {
         }
     }
 
+    fun evictIdleConnections() {
+        try {
+            streamingOkHttpClient.connectionPool.evictAll()
+        } catch (_: Exception) {}
+    }
+
     /**
      * Creates an optimized DataSource.Factory delegating HTTP requests to OkHttp
-     * and local files/assets/content to standard handlers.
+     * and local files/assets/content to standard handlers, with optional mid-packet TS sync alignment.
      */
     fun createDataSourceFactory(
         context: Context,
         userAgent: String,
         headers: Map<String, String>,
-        bandwidthMeter: TransferListener? = null
+        bandwidthMeter: TransferListener? = null,
+        enableTsSyncAlignment: Boolean = true
     ): Pair<DataSource.Factory, DataSource.Factory> {
         return try {
             val okHttpDataSourceFactory = OkHttpDataSource.Factory(streamingOkHttpClient)
@@ -232,12 +309,17 @@ object MediaStreamingClient {
                 okHttpDataSourceFactory.setTransferListener(bandwidthMeter)
             }
 
-            val defaultDataSourceFactory = DefaultDataSource.Factory(
+            val baseDefaultFactory = DefaultDataSource.Factory(
                 context,
                 okHttpDataSourceFactory
             )
+            val wrappedFactory: DataSource.Factory = if (enableTsSyncAlignment) {
+                TsSyncDataSource.Factory(baseDefaultFactory, enableAlignment = true)
+            } else {
+                baseDefaultFactory
+            }
 
-            Pair(okHttpDataSourceFactory, defaultDataSourceFactory)
+            Pair(okHttpDataSourceFactory, wrappedFactory)
         } catch (e: Throwable) {
             android.util.Log.e("MediaStreamingClient", "Error building OkHttpDataSource.Factory, using standard DefaultHttpDataSource", e)
             val stdHttpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
@@ -247,7 +329,12 @@ object MediaStreamingClient {
                 stdHttpFactory.setTransferListener(bandwidthMeter)
             }
             val defaultFactory = DefaultDataSource.Factory(context, stdHttpFactory)
-            Pair(stdHttpFactory, defaultFactory)
+            val wrappedFactory: DataSource.Factory = if (enableTsSyncAlignment) {
+                TsSyncDataSource.Factory(defaultFactory, enableAlignment = true)
+            } else {
+                defaultFactory
+            }
+            Pair(stdHttpFactory, wrappedFactory)
         }
     }
 }

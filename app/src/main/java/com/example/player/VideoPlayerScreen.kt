@@ -212,18 +212,22 @@ fun VideoPlayerScreen(
 
     val isTvOrLiveChannel = try { currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT } catch (_: Throwable) { false }
     val isWebEmbedUrl = remember(currentUrl) {
-        try { !isTvOrLiveChannel && StreamExtractor.isEmbedUrl(currentUrl) } catch (_: Throwable) { false }
+        try { StreamExtractor.isEmbedUrl(currentUrl) } catch (_: Throwable) { false }
     }
     var forceWebEngine by remember(currentMedia.id, currentUrl) { mutableStateOf(false) }
-    val useWebPlayer = (!isTvOrLiveChannel && (isWebEmbedUrl || forceWebEngine))
+    var extractedStreamHeaders by remember(currentMedia.id, currentUrl) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val useWebPlayer = (isWebEmbedUrl || forceWebEngine)
 
-    // Automatically resolve any 2embed/vidsrc/embed streams to native ExoPlayer URLs in the background
+    // Automatically resolve any 2embed/vidsrc/embed/cloud/social streams to native ExoPlayer URLs with headers
     LaunchedEffect(currentUrl) {
         try {
             if (StreamExtractor.isEmbedUrl(currentUrl)) {
                 val directStream = StreamExtractor.extractDirectStream(currentUrl)
                 if (directStream != null && directStream.streamUrl.isNotBlank()) {
-                    currentUrl = directStream.streamUrl
+                    extractedStreamHeaders = directStream.headers
+                    if (directStream.streamUrl != currentUrl) {
+                        currentUrl = directStream.streamUrl
+                    }
                     forceWebEngine = false
                 }
             }
@@ -310,6 +314,7 @@ fun VideoPlayerScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var currentVideoResolution by remember { mutableStateOf<String?>(null) }
     var playerRetryKey by remember(currentUrl) { mutableIntStateOf(0) }
+    var runtimeMimeOverride by remember(currentUrl) { mutableStateOf<String?>(null) }
 
     // MX Player Gestures: Volume & Brightness & Seeking State
     val audioManager = remember(context) {
@@ -804,7 +809,7 @@ fun VideoPlayerScreen(
     }
 
     // Setup ExoPlayer instance with custom http data source, headers and dynamic pipe parsing
-    val exoPlayer = remember(currentUrl, currentMedia, playerRetryKey) {
+    val exoPlayer = remember(currentUrl, currentMedia, playerRetryKey, runtimeMimeOverride) {
         try {
             val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
             rawUrl = currentUrl,
@@ -814,37 +819,9 @@ fun VideoPlayerScreen(
             itemHeaders = currentMedia.drmHeaders,
             itemManifestType = currentMedia.manifestType
         )
-        // Clean URL: normalize duplicate slashes in path ONLY (never touch query string with tokens/base64)
-        val rawClean = streamInfo.cleanUrl.let { url ->
-            val queryIdx = url.indexOf('?')
-            if (queryIdx != -1) {
-                val pathPart = url.substring(0, queryIdx)
-                val queryPart = url.substring(queryIdx)
-                val scheme = if (pathPart.startsWith("https://", ignoreCase = true)) "https://" else if (pathPart.startsWith("http://", ignoreCase = true)) "http://" else ""
-                val rest = if (scheme.isNotEmpty()) pathPart.substring(scheme.length) else pathPart
-                val cleanPath = scheme + rest.replace(Regex("/+"), "/")
-                cleanPath + queryPart
-            } else {
-                val scheme = if (url.startsWith("https://", ignoreCase = true)) "https://" else if (url.startsWith("http://", ignoreCase = true)) "http://" else ""
-                val rest = if (scheme.isNotEmpty()) url.substring(scheme.length) else url
-                scheme + rest.replace(Regex("/+"), "/")
-            }
-        }
-        val isRgkkw = rawClean.contains("rgkkw", ignoreCase = true)
-
-        // Only convert specifically rgkkw.live live channels from .m3u8 to .ts on the path component (rgkkw live streams serve .ts)
-        // NEVER touch movies (/movie/), series (/series/), .mp4, .mkv, or standard HLS playlists!
-        val finalCleanUrl = if (isRgkkw) {
-            val pathBeforeQuery = rawClean.substringBefore('?')
-            val queryPart = if (rawClean.contains('?')) "?" + rawClean.substringAfter('?') else ""
-            if (pathBeforeQuery.contains("/live/", ignoreCase = true) && pathBeforeQuery.endsWith(".m3u8", ignoreCase = true)) {
-                pathBeforeQuery.substringBeforeLast(".m3u8") + ".ts" + queryPart
-            } else {
-                rawClean
-            }
-        } else {
-            rawClean
-        }
+        val rawClean = com.example.util.StreamPlaybackSupport.normalizeStreamUrl(streamInfo.cleanUrl)
+        val finalCleanUrl = rawClean
+        val isRgkkw = finalCleanUrl.contains("rgkkw", ignoreCase = true)
         val drmConfig = streamInfo.drmConfig
 
         var extractedUa: String? = currentMedia.userAgent
@@ -852,6 +829,17 @@ fun VideoPlayerScreen(
         var extractedOrigin: String? = currentMedia.origin
         var extractedCookie: String? = currentMedia.cookie
         val dynamicHeaders = mutableMapOf<String, String>()
+
+        // Merge headers returned by StreamExtractor (e.g. Pixeldrain, MediaFire, 2Embed)
+        extractedStreamHeaders.forEach { (k, v) ->
+            when {
+                k.equals("User-Agent", ignoreCase = true) -> if (extractedUa.isNullOrBlank()) extractedUa = v
+                k.equals("Referer", ignoreCase = true) || k.equals("Referrer", ignoreCase = true) -> if (extractedReferer.isNullOrBlank()) extractedReferer = v
+                k.equals("Origin", ignoreCase = true) -> if (extractedOrigin.isNullOrBlank()) extractedOrigin = v
+                k.equals("Cookie", ignoreCase = true) -> if (extractedCookie.isNullOrBlank()) extractedCookie = v
+                else -> dynamicHeaders[k] = v
+            }
+        }
 
         // Apply headers parsed from URL pipe/query syntax
         streamInfo.headers.forEach { (k, v) ->
@@ -861,6 +849,13 @@ fun VideoPlayerScreen(
                 k.equals("Origin", ignoreCase = true) || k.equals("http-origin", ignoreCase = true) -> extractedOrigin = v
                 k.equals("Cookie", ignoreCase = true) || k.equals("http-cookie", ignoreCase = true) -> extractedCookie = v
                 else -> dynamicHeaders[k] = v
+            }
+        }
+
+        // Extract Basic Auth credentials if embedded in URL (http://user:pass@host/...)
+        com.example.util.StreamPlaybackSupport.extractBasicAuthHeader(finalCleanUrl)?.let { basicAuth ->
+            if (!dynamicHeaders.containsKey("Authorization")) {
+                dynamicHeaders["Authorization"] = basicAuth
             }
         }
 
@@ -895,8 +890,6 @@ fun VideoPlayerScreen(
                 finalCleanUrl.contains("hridoytv", ignoreCase = true)
 
         if (isTapmad || isWorkersDev) {
-            // CRITICAL: Cloudflare workers and Akamai CDN block requests containing web browser headers (Referer/Origin).
-            // Native Android players play these streams with native UA and NO Referer/Origin!
             extractedReferer = null
             extractedOrigin = null
             if (isTapmad && extractedUa.isNullOrBlank()) {
@@ -910,13 +903,31 @@ fun VideoPlayerScreen(
 
         if (isAkr4m) {
             if (extractedUa.isNullOrBlank()) extractedUa = "VLC/3.0.18 LibVLC/3.0.18"
-        } else if (isRgkkw) {
-            if (extractedUa.isNullOrBlank()) extractedUa = "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
         }
 
-        val isStalkerStream = finalCleanUrl.contains("/play/live.php", ignoreCase = true) ||
-                (finalCleanUrl.contains("mac=", ignoreCase = true) && finalCleanUrl.contains("stream=", ignoreCase = true)) ||
-                finalCleanUrl.contains("tivi-one", ignoreCase = true)
+        val isMovieLinkBd = finalCleanUrl.contains("movielinkbd", ignoreCase = true) ||
+                finalCleanUrl.contains("mlbd", ignoreCase = true) ||
+                finalCleanUrl.contains("fsldownload", ignoreCase = true) ||
+                finalCleanUrl.contains("faststream", ignoreCase = true) ||
+                (finalCleanUrl.contains("/p/") && (finalCleanUrl.contains("fsldownload", ignoreCase = true) || finalCleanUrl.contains("faststream", ignoreCase = true))) ||
+                (finalCleanUrl.contains("/media/", ignoreCase = true) && finalCleanUrl.contains("token=", ignoreCase = true))
+
+        val classification = com.example.util.StreamPlaybackSupport.classifyStream(
+            cleanUrl = finalCleanUrl,
+            mediaType = currentMedia.type,
+            isLiveFlag = currentMedia.isLive,
+            isSeriesFlag = currentMedia.isSeries,
+            category = currentMedia.category,
+            drmManifestType = drmConfig?.manifestType,
+            itemManifestType = currentMedia.manifestType,
+            isMovieLinkBd = isMovieLinkBd,
+            isToffee = isToffee,
+            mimeOverride = runtimeMimeOverride
+        )
+        val isStalkerStream = classification.isStalkerStream
+        val isXtreamStream = classification.isXtreamStream
+        val isTsStream = classification.isTsStream
+        val isLiveStream = classification.isLiveStream
 
         val stalkerMacInUrl = if (isStalkerStream) {
             try { android.net.Uri.parse(finalCleanUrl).getQueryParameter("mac") } catch (_: Exception) { null }
@@ -934,119 +945,39 @@ fun VideoPlayerScreen(
             extractedOrigin = null
         }
 
-        val isMovieLinkBd = finalCleanUrl.contains("movielinkbd", ignoreCase = true) ||
-                finalCleanUrl.contains("mlbd", ignoreCase = true) ||
-                finalCleanUrl.contains("fsldownload", ignoreCase = true) ||
-                finalCleanUrl.contains("faststream", ignoreCase = true) ||
-                (finalCleanUrl.contains("/p/") && (finalCleanUrl.contains("fsldownload", ignoreCase = true) || finalCleanUrl.contains("faststream", ignoreCase = true))) ||
-                (finalCleanUrl.contains("/media/", ignoreCase = true) && finalCleanUrl.contains("token=", ignoreCase = true))
-
-        val pathBeforeQuery = finalCleanUrl.substringBefore('?').lowercase()
-        val isM3u8Pattern = pathBeforeQuery.endsWith(".m3u8") ||
-                finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
-                finalCleanUrl.contains("/hls/", ignoreCase = true) ||
-                isToffee
-
-        val isMovieFormat = pathBeforeQuery.endsWith(".mp4") ||
-                pathBeforeQuery.endsWith(".mkv") ||
-                pathBeforeQuery.endsWith(".avi") ||
-                pathBeforeQuery.endsWith(".webm") ||
-                pathBeforeQuery.endsWith(".mov") ||
-                pathBeforeQuery.endsWith(".flv") ||
-                finalCleanUrl.contains("/movie/", ignoreCase = true) ||
-                finalCleanUrl.contains("/series/", ignoreCase = true) ||
-                currentMedia.type == MediaType.MOVIE ||
-                currentMedia.type == MediaType.SERIES ||
-                currentMedia.isSeries ||
-                isMovieLinkBd
-
-        val isXtreamStream = finalCleanUrl.contains("/live/", ignoreCase = true) ||
-                finalCleanUrl.contains("/movie/", ignoreCase = true) ||
-                finalCleanUrl.contains("/series/", ignoreCase = true) ||
-                finalCleanUrl.contains("fixtv123", ignoreCase = true) ||
-                finalCleanUrl.contains("rgkkw", ignoreCase = true) ||
-                finalCleanUrl.contains("growthtry", ignoreCase = true) ||
-                finalCleanUrl.contains("my-king", ignoreCase = true) ||
-                finalCleanUrl.contains("zerotv", ignoreCase = true) ||
-                isStalkerStream ||
-                isRgkkw
-
-        val isTsStream = !isMovieFormat && !isMovieLinkBd && (pathBeforeQuery.endsWith(".ts") ||
-                finalCleanUrl.contains(".ts?", ignoreCase = true) ||
-                finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
-                finalCleanUrl.contains("output=ts", ignoreCase = true) ||
-                finalCleanUrl.contains("extension=ts", ignoreCase = true) ||
-                isStalkerStream ||
-                ((isXtreamStream || isRgkkw) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true)))
-
-        val primaryUa = when {
-            isStalkerStream -> "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
-            isTapmad -> "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)"
-            !extractedUa.isNullOrBlank() -> extractedUa!!
-            isToffee -> "Toffee (Linux;Android 14)"
-            isMovieLinkBd -> "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-            isTsStream || isAkr4m || isXtreamStream -> "Lavf/58.76.100"
-            else -> "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-        }
-
-        // Multi-Agent fallback list for maximum online stream compatibility
-        val fallbackUserAgents = when {
-            isStalkerStream -> listOf(
-                "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
-                "VLC/3.0.18 LibVLC/3.0.18",
-                "TiviMate/4.7.0 (Android TV)",
-                "Lavf/58.76.100",
-                "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
-            ).distinct()
-            isTapmad -> listOf(
-                "NetworkStreamPlayer/1.0 (Linux; Android 14; Mobile)",
-                "ExoPlayerLib/2.19.1 (Linux; Android 14; Mobile)",
-                "VLC/3.0.18 LibVLC/3.0.18",
-                "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-                "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)"
-            ).distinct()
-            isMovieLinkBd -> listOf(
-                primaryUa,
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-            ).distinct()
-            else -> listOf(
-                primaryUa,
-                "Lavf/58.76.100",
-                "VLC/3.0.18 LibVLC/3.0.18",
-                "IPTVSmartersPro/3.1.5.1 (Linux; Android 14)",
-                "Televizo/1.9.3 (Linux; Android 14)",
-                "TiviMate/4.7.0 (Android TV)",
-                "Toffee (Linux;Android 14)",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ).distinct()
-        }
+        val fallbackUserAgents = com.example.util.StreamPlaybackSupport.buildUserAgentFallbackList(
+            url = finalCleanUrl,
+            extractedUa = extractedUa,
+            isStalkerStream = isStalkerStream,
+            isTapmad = isTapmad,
+            isMovieLinkBd = isMovieLinkBd,
+            isToffee = isToffee,
+            isTsOrXtream = isTsStream || isXtreamStream || isRgkkw
+        )
         val finalUserAgent = fallbackUserAgents[playerRetryKey.coerceAtLeast(0) % fallbackUserAgents.size]
 
         val uriHost = try { android.net.Uri.parse(finalCleanUrl).host } catch (_: Exception) { null }
-        val streamHostReferer = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost/" else null
-        val streamHostOrigin = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost" else null
+        val streamHostReferer = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isTsStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost/" else null
+        val streamHostOrigin = if (!uriHost.isNullOrBlank() && !isXtreamStream && !isTsStream && !isToffee && !isTapmad && !isWorkersDev) "https://$uriHost" else null
 
         val requestHeaders = mutableMapOf<String, String>()
         requestHeaders["User-Agent"] = finalUserAgent
         val finalReferer = when {
-            isTapmad || isWorkersDev -> null
+            isTapmad || isWorkersDev || isXtreamStream || isTsStream -> extractedReferer
             !extractedReferer.isNullOrBlank() -> extractedReferer
             isToffee -> "https://toffeelive.com/"
-            isXtreamStream -> null
             isMovieLinkBd -> streamHostReferer ?: if (finalCleanUrl.contains("fsldownload", ignoreCase = true)) "https://fsldownload.com/" else "https://fast.movielinkbd.app/"
             else -> streamHostReferer
         }
         val finalOrigin = when {
-            isTapmad || isWorkersDev -> null
+            isTapmad || isWorkersDev || isXtreamStream || isTsStream -> extractedOrigin
             !extractedOrigin.isNullOrBlank() -> extractedOrigin
             isToffee -> "https://toffeelive.com"
-            isXtreamStream -> null
             isMovieLinkBd -> streamHostOrigin ?: if (finalCleanUrl.contains("fsldownload", ignoreCase = true)) "https://fsldownload.com" else "https://fast.movielinkbd.app"
             else -> streamHostOrigin
         }
 
-        val suppressReferer = (playerRetryKey == 1) || isXtreamStream || isTapmad || isWorkersDev
+        val suppressReferer = (playerRetryKey % 2 == 1) || isTapmad || isWorkersDev || (isXtreamStream && extractedReferer.isNullOrBlank())
         if (!finalReferer.isNullOrBlank() && !suppressReferer) {
             requestHeaders["Referer"] = finalReferer
         }
@@ -1081,62 +1012,70 @@ fun VideoPlayerScreen(
         }
 
         requestHeaders["Accept"] = "*/*"
+        requestHeaders["Accept-Encoding"] = "identity"
         if (!isTsStream && !isXtreamStream) {
             requestHeaders["Connection"] = "keep-alive"
             requestHeaders["Cache-Control"] = "no-cache"
         }
-        if (isMovieLinkBd) {
-            requestHeaders["Accept-Encoding"] = "identity"
-        }
         requestHeaders.putAll(dynamicHeaders)
 
-        // High-performance OkHttp DataSource Factory: supports cross-host redirects, chunked transfer, and resilient keep-alive
+        // High-performance OkHttp DataSource Factory with mid-packet MPEG-TS 0x47 sync alignment
         val (httpDataSourceFactory, defaultDataSourceFactory) = com.example.util.MediaStreamingClient.createDataSourceFactory(
             context = context,
             userAgent = finalUserAgent,
             headers = requestHeaders,
-            bandwidthMeter = bandwidthMeter
+            bandwidthMeter = bandwidthMeter,
+            enableTsSyncAlignment = isTsStream || classification.kind == com.example.util.StreamKind.PROGRESSIVE
         )
 
-        val isLiveStream = !isMovieFormat && !isMovieLinkBd && (
-                currentMedia.isLive ||
-                currentMedia.type == MediaType.LIVE_TV ||
-                currentMedia.type == MediaType.LIVE_EVENT ||
-                isTsStream ||
-                isXtreamStream ||
-                finalCleanUrl.contains(".m3u8", ignoreCase = true)
-        )
-
-        // Instant fail-fast error policy: avoids long connection checking waits, fails fast in 2 retries
         val loadErrorHandlingPolicy = object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(3) {
             override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
-                return 250L
+                return 300L
             }
             override fun getMinimumLoadableRetryCount(dataType: Int): Int {
                 return 2
             }
         }
 
-        // TS Extractor Flags for IPTV streams (MP2, AC3, AAC in MPEG-TS with PES packet size variations)
-        val tsPayloadReaderFlags = androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
+        // Toggle TS Extractor flags & mode across retries:
+        // Primary: MODE_SINGLE_PMT locks immediately onto single-channel IPTV .ts streams (like rgkkw.live).
+        // Retry: MODE_MULTI_PMT + FLAG_DETECT_ACCESS_UNITS handles multi-program/slice-delimited streams.
+        val baseTsFlags = androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
                 androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or
-                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM or
-                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+                androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM
+        val tsPayloadReaderFlags = if (playerRetryKey % 2 == 1) {
+            baseTsFlags or androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
+        } else {
+            baseTsFlags
+        }
+        val tsMode = if (playerRetryKey % 2 == 1) {
+            androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT
+        } else {
+            androidx.media3.extractor.ts.TsExtractor.MODE_SINGLE_PMT
+        }
 
         val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(!isLiveStream)
             .setTsExtractorFlags(tsPayloadReaderFlags)
-            .setTsExtractorMode(androidx.media3.extractor.ts.TsExtractor.MODE_MULTI_PMT)
+            .setTsExtractorMode(tsMode)
 
-        val mediaSourceFactory = DefaultMediaSourceFactory(defaultDataSourceFactory, extractorsFactory)
-            .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
-
-        if (drmConfig != null) {
-            val drmSessionManager = com.example.util.DrmHelper.createDrmSessionManager(drmConfig, httpDataSourceFactory)
-            if (drmSessionManager != null) {
-                mediaSourceFactory.setDrmSessionManagerProvider { drmSessionManager }
+        val mediaSourceFactory: androidx.media3.exoplayer.source.MediaSource.Factory =
+            if (classification.kind == com.example.util.StreamKind.RTSP) {
+                androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                    .setUserAgent(finalUserAgent)
+                    .setForceUseRtpTcp(playerRetryKey > 0)
+                    .setTimeoutMs(10_000L)
+            } else {
+                DefaultMediaSourceFactory(defaultDataSourceFactory, extractorsFactory)
+                    .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy).also { factory ->
+                        if (drmConfig != null) {
+                            val drmSessionManager = com.example.util.DrmHelper.createDrmSessionManager(drmConfig, httpDataSourceFactory)
+                            if (drmSessionManager != null) {
+                                factory.setDrmSessionManagerProvider { drmSessionManager }
+                            }
+                        }
+                    }
             }
-        }
 
         val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context).apply {
             setEnableDecoderFallback(true)
@@ -1235,48 +1174,10 @@ fun VideoPlayerScreen(
                 val mediaItemBuilder = MediaItem.Builder()
                     .setUri(finalMediaUri)
 
-                val isMp4 = pathBeforeQuery.endsWith(".mp4") || (!finalCleanUrl.contains(".m3u8", ignoreCase = true) && finalCleanUrl.contains(".mp4", ignoreCase = true))
-                val isMkv = pathBeforeQuery.endsWith(".mkv") || isMovieLinkBd
-                val isWebm = pathBeforeQuery.endsWith(".webm")
-                val isFileHost = finalCleanUrl.contains("pixeldrain", ignoreCase = true) ||
-                        finalCleanUrl.contains("pixeldra.in", ignoreCase = true) ||
-                        finalCleanUrl.contains("drive.google.com", ignoreCase = true) ||
-                        finalCleanUrl.contains("dropbox.com", ignoreCase = true) ||
-                        finalCleanUrl.contains("mediafire.com", ignoreCase = true) ||
-                        isMovieLinkBd
+                val isMpd = classification.kind == com.example.util.StreamKind.DASH
+                val isTs = classification.isTsStream
 
-                val isMpd = finalCleanUrl.contains(".mpd", ignoreCase = true) ||
-                        finalCleanUrl.contains("dash", ignoreCase = true) ||
-                        drmConfig?.manifestType?.equals("mpd", ignoreCase = true) == true ||
-                        currentMedia.manifestType?.equals("mpd", ignoreCase = true) == true
-
-                val isExplicitTs = !isMovieFormat && !isMp4 && !isMkv && !isWebm && (
-                        pathBeforeQuery.endsWith(".ts") ||
-                        finalCleanUrl.contains(".ts?", ignoreCase = true) ||
-                        finalCleanUrl.contains("video/mp2t", ignoreCase = true) ||
-                        finalCleanUrl.contains("output=ts", ignoreCase = true) ||
-                        finalCleanUrl.contains("extension=ts", ignoreCase = true) ||
-                        isStalkerStream ||
-                        ((isRgkkw || isXtreamStream) && !finalCleanUrl.contains(".m3u8", ignoreCase = true) && !finalCleanUrl.contains(".mpd", ignoreCase = true))
-                )
-
-                val isM3u8 = !isExplicitTs && (
-                        finalCleanUrl.contains(".m3u8", ignoreCase = true) ||
-                        pathBeforeQuery.endsWith(".m3u8") ||
-                        finalCleanUrl.contains("/hls/", ignoreCase = true) ||
-                        drmConfig?.manifestType?.equals("hls", ignoreCase = true) == true ||
-                        currentMedia.manifestType?.equals("hls", ignoreCase = true) == true ||
-                        isToffee ||
-                        (!isFileHost && !isMovieFormat && !isMp4 && !isMkv && !isWebm && !isMpd && (
-                                currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT || currentMedia.isLive
-                        ))
-                )
-
-                val isTs = isExplicitTs
-
-                // For live streams, do NOT enforce restrictive 8s targetOffset on HLS/TS!
-                // Enforcing targetOffset throttles ExoPlayer buffer to only 8s, causing periodic stalls/freezes every few seconds.
-                // Leaving liveConfiguration default allows ExoPlayer to buffer 25-60s ahead continuously without freezing.
+                // For live DASH streams, configure gentle speed adjustment; leave HLS/TS default to avoid buffer throttling
                 if (isLiveStream && isMpd) {
                     mediaItemBuilder.setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
@@ -1298,31 +1199,29 @@ fun VideoPlayerScreen(
                     mediaItemBuilder.setDrmConfiguration(drmConfigBuilder.build())
                 }
 
-                if (isMpd) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
-                } else if (isTs) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_MP2T)
-                } else if (isM3u8) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
-                } else if (isMp4) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_MP4)
-                } else if (isMkv) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_MATROSKA)
-                } else if (isWebm) {
-                    mediaItemBuilder.setMimeType(androidx.media3.common.MimeTypes.VIDEO_WEBM)
+                classification.exoMimeType?.let { resolvedMime ->
+                    mediaItemBuilder.setMimeType(resolvedMime)
                 }
 
                 try {
-                    if (finalCleanUrl.isNotBlank()) {
+                    if (classification.kind == com.example.util.StreamKind.EXTERNAL_PROTOCOL) {
+                        isBuffering = false
+                        isActuallyBuffering = false
+                        errorMessage = "এই প্রোটোকল লিংকটি (${finalCleanUrl.substringBefore("://").uppercase()}) ইন-অ্যাপ প্লেয়ারের বদলে VLC / MX / Televizo প্লেয়ারে চালান।"
+                    } else if (finalCleanUrl.isNotBlank()) {
                         setMediaItem(mediaItemBuilder.build())
                         playWhenReady = true
                         prepare()
                     } else {
+                        isBuffering = false
+                        isActuallyBuffering = false
                         errorMessage = "স্ট্রিমিং লিঙ্ক খালি। অনুগ্রহ করে বিকল্প সার্ভার বেছে নিন।"
                     }
                 } catch (e: Throwable) {
                     android.util.Log.e("VideoPlayerScreen", "Error preparing media item", e)
-                    errorMessage = "ভিডিও লোড করা যাচ্ছে না। অনুগ্রহ করে বিকল্প সার্ভার চেষ্টা করুন।"
+                    isBuffering = false
+                    isActuallyBuffering = false
+                    errorMessage = "ভিডিও লোড করা যাচ্ছে না। অনুগ্রহ করে বিকল্প সার্ভার বা এক্সটার্নাল প্লেয়ার চেষ্টা করুন।"
                 }
 
                 addListener(object : Player.Listener {
@@ -1493,23 +1392,16 @@ fun VideoPlayerScreen(
                             return
                         }
 
-                        // Seamless auto-reconnect on active live channel:
-                        // If the channel was already playing and suffers a temporary network or CDN drop,
-                        // DO NOT leave the channel! Reconnect cleanly to the current stream.
+                        com.example.util.MediaStreamingClient.evictIdleConnections()
+
+                        // Seamless auto-reconnect on active live channel drop (rebuilds ExoPlayer cleanly with next UA/mode)
                         if (hasStartedPlaying && playerRetryKey < 4) {
                             playerRetryKey++
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                try {
-                                    seekToDefaultPosition()
-                                    prepare()
-                                    playWhenReady = true
-                                } catch (_: Exception) {}
-                            }, 350L)
+                            errorMessage = null
                             return
                         }
-                        val currentServers = currentMedia.getAllServers()
+
                         val httpEx = error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
-                        val is405 = httpEx?.responseCode == 405
                         val is403Or401 = httpEx?.responseCode == 403 || httpEx?.responseCode == 401
                         val isParsingOrContainerError = error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
                                 error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ||
@@ -1517,35 +1409,58 @@ fun VideoPlayerScreen(
                                 error.cause is androidx.media3.common.ParserException ||
                                 error.cause is androidx.media3.exoplayer.source.UnrecognizedInputFormatException
 
-                        // 1. Xtream / Stalker MPEG-TS vs HLS fast swap (single immediate fallback)
+                        // 0. If runtime HTTP Content-Type / magic-byte sniffer found a disguised HLS or DASH stream (e.g. .ts returning #EXTM3U), switch format immediately!
+                        val sniffedRuntimeHint = com.example.util.StreamPlaybackSupport.getRuntimeHint(finalCleanUrl)
+                        if (!sniffedRuntimeHint.isNullOrBlank() && runtimeMimeOverride != sniffedRuntimeHint && playerRetryKey < 4) {
+                            runtimeMimeOverride = sniffedRuntimeHint
+                            playerRetryKey++
+                            errorMessage = null
+                            return
+                        }
+
+                        // 0.1 If forced container MIME failed parsing, retry once with Media3 auto-sniff (mimeType = null)
+                        if (isParsingOrContainerError && classification.exoMimeType != null && runtimeMimeOverride != "AUTO_SNIFF" && playerRetryKey < 4) {
+                            runtimeMimeOverride = "AUTO_SNIFF"
+                            playerRetryKey++
+                            errorMessage = null
+                            return
+                        }
+
+                        // 1. Xtream / Stalker MPEG-TS <-> HLS fallback swap (now works for rgkkw.live as well after trying TS modes/UAs)
                         val isProtectHls = currentUrl.contains("toffeelive.com", ignoreCase = true) ||
                                 currentUrl.contains("toffee", ignoreCase = true) ||
                                 currentUrl.contains("akamaized.net", ignoreCase = true) ||
                                 currentUrl.contains("tapmad", ignoreCase = true)
-                        val isRgkkwCurrent = currentUrl.contains("rgkkw", ignoreCase = true)
-                        val isStalkerOrLive = currentUrl.contains("/live/") || currentUrl.contains("/play/live.php") || currentUrl.contains("mac=")
-                        if (!isProtectHls && !isRgkkwCurrent && isStalkerOrLive && (currentUrl.contains(".ts", ignoreCase = true) || currentUrl.contains("extension=ts", ignoreCase = true)) && playerRetryKey == 0) {
+                        val isStalkerOrLive = currentUrl.contains("/live/", ignoreCase = true) ||
+                                currentUrl.contains("/play/live.php", ignoreCase = true) ||
+                                currentUrl.contains("mac=", ignoreCase = true)
+                        if (!isProtectHls && isStalkerOrLive && (currentUrl.contains(".ts", ignoreCase = true) || currentUrl.contains("extension=ts", ignoreCase = true)) && playerRetryKey >= 1 && playerRetryKey < 3) {
+                            runtimeMimeOverride = null
                             currentUrl = currentUrl.replace(".ts", ".m3u8", ignoreCase = true).replace("extension=ts", "extension=m3u8", ignoreCase = true)
-                            playerRetryKey = 1
+                            playerRetryKey++
                             errorMessage = null
                             return
-                        } else if (!isProtectHls && isStalkerOrLive && (currentUrl.contains(".m3u8", ignoreCase = true) || currentUrl.contains("extension=m3u8", ignoreCase = true)) && playerRetryKey == 0) {
+                        } else if (!isProtectHls && isStalkerOrLive && (currentUrl.contains(".m3u8", ignoreCase = true) || currentUrl.contains("extension=m3u8", ignoreCase = true)) && playerRetryKey >= 1 && playerRetryKey < 3) {
+                            runtimeMimeOverride = null
                             currentUrl = currentUrl.replace(".m3u8", ".ts", ignoreCase = true).replace("extension=m3u8", "extension=ts", ignoreCase = true)
+                            playerRetryKey++
+                            errorMessage = null
+                            return
+                        }
+
+                        // 2. Multi-Server Fast Auto-Switch (try 1 TS/UA retry first before leaving primary server)
+                        val allServers = currentMedia.getAllServers()
+                        val isAkamai403 = (is403Or401 || isParsingOrContainerError) &&
+                                (currentUrl.contains("akamaized.net", ignoreCase = true) || currentUrl.contains("tapmad", ignoreCase = true))
+
+                        if (isAkamai403 && playerRetryKey < 1) {
                             playerRetryKey = 1
                             errorMessage = null
                             return
                         }
 
-                        // 2. Multi-Server Fast Auto-Switch:
-                        // If this channel has alternative servers (e.g. Sports 1 failed -> immediately try Sports 2),
-                        // directly switch to the next server without waiting!
-                        val allServers = currentMedia.getAllServers()
-                        val isAkamai403 = (is403Or401 || isParsingOrContainerError) &&
-                                (currentUrl.contains("akamaized.net", ignoreCase = true) || currentUrl.contains("tapmad", ignoreCase = true))
-
-                        // Allow Tapmad stream to retry with native fallback User-Agent before auto-switching
-                        if (isAkamai403 && playerRetryKey < 1) {
-                            playerRetryKey = 1
+                        if (allServers.size > 1 && playerRetryKey < 1 && !isAkamai403) {
+                            playerRetryKey++
                             errorMessage = null
                             return
                         }
@@ -1565,6 +1480,7 @@ fun VideoPlayerScreen(
                             ).show()
                             errorMessage = null
                             playerRetryKey = 0
+                            runtimeMimeOverride = null
                             forceWebEngine = false
                             pendingServerSwitchIndex = nextIdx
                             return
@@ -1591,27 +1507,38 @@ fun VideoPlayerScreen(
                             } catch (_: Exception) {}
                         }
 
-                        // 2.2 Retry single server stream with alternate User-Agent and fresh connection once before auto-skip
-                        if (allServers.size <= 1 && playerRetryKey < 1 && !currentMedia.isSeries) {
+                        // 2.2 Retry single-server / direct streams across User-Agents & TS/HLS modes up to 4 times
+                        if (allServers.size <= 1 && playerRetryKey < 4) {
                             playerRetryKey++
                             errorMessage = null
                             return
                         }
 
-                        // 3. If multiple servers exist and all were exhausted, auto-play the next channel
-                        // 4. Automatic Next Channel Playback on connection failure
-                        val nextChannelMsg = "${currentMedia.title} সংযোগ ব্যাহত হয়েছে। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেল চালানো হচ্ছে..."
-                        android.widget.Toast.makeText(context, nextChannelMsg, android.widget.Toast.LENGTH_SHORT).show()
-                        errorMessage = null
-                        playerRetryKey = 0
-                        pendingChannelSwitchDelta = 1
+                        // 3. Only auto-switch channels if playlist actually has multiple channels and auto-switch is enabled!
+                        // Never abandon a Direct Stream link to jump to an unrelated cached channel.
+                        val isDirectSingleStream = playlist.size <= 1 || currentMedia.id.startsWith("direct_") || currentMedia.category == "Direct Stream"
+                        if (!isDirectSingleStream && isAutoSwitchOnFailureEnabled && !currentMedia.isSeries) {
+                            val nextChannelMsg = "${currentMedia.title} সংযোগ ব্যাহত হয়েছে। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেল চালানো হচ্ছে..."
+                            android.widget.Toast.makeText(context, nextChannelMsg, android.widget.Toast.LENGTH_SHORT).show()
+                            errorMessage = null
+                            playerRetryKey = 0
+                            runtimeMimeOverride = null
+                            pendingChannelSwitchDelta = 1
+                        } else {
+                            errorMessage = "স্ট্রিমটি লোড করা যাচ্ছে না। অনুগ্রহ করে পুনরায় চেষ্টা করুন অথবা অন্য প্লেয়ার (VLC / Televizo / NSP) ব্যবহার করুন।"
+                        }
                     }
                 })
             }
         } catch (t: Throwable) {
             android.util.Log.e("VideoPlayerScreen", "Fatal error creating ExoPlayer", t)
-            errorMessage = null
-            pendingChannelSwitchDelta = 1
+            val isDirectSingleStream = playlist.size <= 1 || currentMedia.id.startsWith("direct_") || currentMedia.category == "Direct Stream"
+            if (!isDirectSingleStream && isAutoSwitchOnFailureEnabled) {
+                errorMessage = null
+                pendingChannelSwitchDelta = 1
+            } else {
+                errorMessage = "প্লেয়ার চালু করা যায়নি। পুনরায় চেষ্টা করুন বা এক্সটার্নাল প্লেয়ার ব্যবহার করুন।"
+            }
             try {
                 ExoPlayer.Builder(context).build().apply {
                     playWhenReady = false
@@ -1623,11 +1550,11 @@ fun VideoPlayerScreen(
     }
 
     // Dead / Unplayable Channel Watchdog on initial load:
-    // If a selected channel has not started playing within 8 seconds,
-    // tries alternative server or automatically plays the next channel!
+    // Waits 14s per attempt (so IPTV restreams have time to connect), tries retries/servers first,
+    // and never jumps off a Direct Stream link.
     val isChannelOrLive = currentMedia.isLive || currentMedia.type == MediaType.LIVE_TV || currentMedia.type == MediaType.LIVE_EVENT
-    LaunchedEffect(currentMedia.id, currentUrl, hasStartedPlaying) {
-        if (!hasStartedPlaying && isChannelOrLive) {
+    LaunchedEffect(currentMedia.id, currentUrl, playerRetryKey, hasStartedPlaying) {
+        if (!hasStartedPlaying && isChannelOrLive && errorMessage == null) {
             if (currentUrl.isBlank()) {
                 delay(600)
                 if (!hasStartedPlaying) {
@@ -1637,28 +1564,40 @@ fun VideoPlayerScreen(
                         val nextServerName = allServers.getOrNull(nextIdx)?.name ?: "সার্ভার ${nextIdx + 1}"
                         android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                         pendingServerSwitchIndex = nextIdx
-                    } else {
+                    } else if (playlist.size > 1 && isAutoSwitchOnFailureEnabled) {
                         android.widget.Toast.makeText(context, "এই চ্যানেলটি অনুপলব্ধ। পরবর্তী চ্যানেল চালানো হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                         pendingChannelSwitchDelta = 1
+                    } else {
+                        errorMessage = "স্ট্রিমিং লিংক পাওয়া যায়নি।"
                     }
                 }
                 return@LaunchedEffect
             }
 
-            // Connection watchdog timeout: 8 seconds
-            delay(8000)
-            if (!hasStartedPlaying) {
+            // Connection watchdog timeout: 14 seconds per attempt
+            delay(14000)
+            if (!hasStartedPlaying && errorMessage == null) {
                 val allServers = currentMedia.getAllServers()
-                if (allServers.size > 1 && selectedServerIndex < allServers.size - 1) {
+                if (playerRetryKey < 2 && allServers.size <= 1) {
+                    com.example.util.MediaStreamingClient.evictIdleConnections()
+                    playerRetryKey++
+                } else if (allServers.size > 1 && selectedServerIndex < allServers.size - 1) {
                     val nextIdx = selectedServerIndex + 1
                     val nextServerName = allServers.getOrNull(nextIdx)?.name ?: "সার্ভার ${nextIdx + 1}"
                     android.widget.Toast.makeText(context, "বিকল্প সার্ভার ($nextServerName) চেষ্টা করা হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
+                    playerRetryKey = 0
+                    runtimeMimeOverride = null
                     pendingServerSwitchIndex = nextIdx
-                } else {
+                } else if (playlist.size > 1 && isAutoSwitchOnFailureEnabled && !currentMedia.id.startsWith("direct_") && currentMedia.category != "Direct Stream") {
                     android.widget.Toast.makeText(context, "${currentMedia.title} প্লে হচ্ছে না। স্বয়ংক্রিয়ভাবে পরবর্তী চ্যানেল প্লে হচ্ছে...", android.widget.Toast.LENGTH_SHORT).show()
                     errorMessage = null
                     playerRetryKey = 0
+                    runtimeMimeOverride = null
                     pendingChannelSwitchDelta = 1
+                } else {
+                    isBuffering = false
+                    isActuallyBuffering = false
+                    errorMessage = "সার্ভার থেকে রেসপন্স পাওয়া যায়নি। পুনরায় চেষ্টা করুন অথবা অন্য প্লেয়ারে চালান।"
                 }
             }
         }
@@ -1811,8 +1750,10 @@ fun VideoPlayerScreen(
             if (didSwitch) return
         }
 
+        val isDirectSingleStream = playlist.size <= 1 && (currentMedia.id.startsWith("direct_") || currentMedia.category == "Direct Stream")
         val list = when {
             playlist.size > 1 -> playlist
+            isDirectSingleStream -> listOf(currentMedia)
             else -> {
                 val cached = playerRepository.getCachedLiveTvChannels().ifEmpty {
                     playerRepository.getCachedSportsMatches().ifEmpty {
@@ -1885,10 +1826,11 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Auto-skip to next channel if error message persists for more than 3 seconds
+    // Auto-skip to next channel only if playlist has multiple channels and auto-switch is enabled
     LaunchedEffect(errorMessage) {
-        if (errorMessage != null && !currentMedia.isSeries) {
-            delay(3000)
+        val isDirectSingleStream = playlist.size <= 1 || currentMedia.id.startsWith("direct_") || currentMedia.category == "Direct Stream"
+        if (errorMessage != null && !currentMedia.isSeries && !isDirectSingleStream && isAutoSwitchOnFailureEnabled) {
+            delay(4000)
             if (errorMessage != null) {
                 errorMessage = null
                 switchChannel(1)
@@ -2253,7 +2195,7 @@ fun VideoPlayerScreen(
         )
     }
 
-    if (showExternalPlayerDialog && isMovieContent) {
+    if (showExternalPlayerDialog) {
         com.example.ui.ExternalPlayerDialog(
             streamUrl = currentUrl,
             title = currentMedia.title,
@@ -2517,9 +2459,7 @@ fun VideoPlayerScreen(
                         isAutoSwitchOnFailureEnabled = nextState
                         playerRepository.setAutoSwitchChannelOnFailure(nextState)
                     },
-                    onOpenExternalPlayer = if (isMovieContent) {
-                        { showExternalPlayerDialog = true }
-                    } else null
+                    onOpenExternalPlayer = { showExternalPlayerDialog = true }
                 )
             }
 
@@ -2891,22 +2831,20 @@ fun VideoPlayerScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        // External Player Button (Televizo / VLC / NSP) - Only for Movies
-                        if (isMovieContent) {
-                            IconButton(
-                                onClick = { showExternalPlayerDialog = true },
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF1E293B).copy(alpha = 0.85f))
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.OpenInNew,
-                                    contentDescription = "External Player",
-                                    tint = Color(0xFFA855F7),
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            }
+                        // External Player Button (Televizo / VLC / NSP / MX) for all stream types
+                        IconButton(
+                            onClick = { showExternalPlayerDialog = true },
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF1E293B).copy(alpha = 0.85f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.OpenInNew,
+                                contentDescription = "External Player",
+                                tint = Color(0xFFA855F7),
+                                modifier = Modifier.size(15.dp)
+                            )
                         }
 
                         // Picture-in-Picture (PiP) Button
@@ -3079,6 +3017,15 @@ fun VideoPlayerScreen(
                                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                                         ) {
                                             Text("পরবর্তী চ্যানেল", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { showExternalPlayerDialog = true },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6), contentColor = Color.White),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                        ) {
+                                            Text("অন্য প্লেয়ার", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }

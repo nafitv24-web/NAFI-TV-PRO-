@@ -45,24 +45,38 @@ object StreamExtractor {
             clean.contains("ok.ru") ||
             clean.contains("drive.google.com") ||
             clean.contains("dropbox.com") ||
+            clean.contains("mediafire.com") ||
             clean.contains("pixeldrain.com/u/") ||
             clean.contains("pixeldrain.dev/u/")
         ) {
             return true
         }
 
+        if (clean.startsWith("rtsp://") || clean.startsWith("rtmp://") || clean.startsWith("udp://") || clean.startsWith("rtp://") || clean.startsWith("mms://")) {
+            return false
+        }
+
         // Direct stream formats that ExoPlayer plays natively
         val hasDirectMediaExtension = clean.contains(".m3u8") ||
                 clean.contains(".mpd") ||
                 clean.contains(".mp4") ||
+                clean.contains(".m4v") ||
                 clean.contains(".mkv") ||
                 clean.contains(".webm") ||
                 clean.contains(".ts") ||
+                clean.contains(".m2ts") ||
                 clean.contains(".avi") ||
                 clean.contains(".mov") ||
-                clean.contains(".flv")
+                clean.contains(".flv") ||
+                clean.contains(".3gp") ||
+                clean.contains(".mp3") ||
+                clean.contains(".aac") ||
+                clean.contains(".m4a") ||
+                clean.contains(".ogg") ||
+                clean.contains(".flac") ||
+                clean.contains(".wav")
 
-        if (hasDirectMediaExtension && !clean.contains("drive.google.com")) {
+        if (hasDirectMediaExtension && !clean.contains("drive.google.com") && !clean.contains("mediafire.com") && !clean.contains("dropbox.com")) {
             return false
         }
 
@@ -159,6 +173,16 @@ object StreamExtractor {
             // 4. Google Drive resolver
             if (lower.contains("drive.google.com")) {
                 extractGoogleDriveStream(cleanUrl)?.let { return@withContext it }
+            }
+
+            // 4b. Dropbox direct download stream resolver
+            if (lower.contains("dropbox.com")) {
+                extractDropboxStream(cleanUrl)?.let { return@withContext it }
+            }
+
+            // 4c. MediaFire direct link scraper
+            if (lower.contains("mediafire.com")) {
+                extractMediaFireStream(cleanUrl)?.let { return@withContext it }
             }
 
             // 5. Vimeo resolver
@@ -340,6 +364,54 @@ object StreamExtractor {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    /**
+     * Dropbox direct stream resolver: converts ?dl=0 share links to ?raw=1 direct media stream
+     */
+    fun extractDropboxStream(url: String): ExtractedStreamResult? {
+        return try {
+            val directUrl = when {
+                url.contains("dl=0") -> url.replace("dl=0", "raw=1")
+                url.contains("raw=1") -> url
+                url.contains("?") -> "$url&raw=1"
+                else -> "$url?raw=1"
+            }
+            ExtractedStreamResult(
+                streamUrl = directUrl,
+                headers = mapOf("User-Agent" to DEFAULT_UA)
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * MediaFire direct stream resolver: extracts the direct download href from the file page
+     */
+    suspend fun extractMediaFireStream(url: String): ExtractedStreamResult? = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", DEFAULT_UA)
+                .build()
+            val resp = client.newCall(req).execute()
+            val html = resp.body?.string() ?: ""
+            resp.close()
+            val matcher = Pattern.compile("href=[\"'](https?://download[^\"']+)[\"']", Pattern.CASE_INSENSITIVE).matcher(html)
+            if (matcher.find()) {
+                val direct = matcher.group(1)
+                if (!direct.isNullOrBlank()) {
+                    return@withContext ExtractedStreamResult(
+                        streamUrl = direct,
+                        headers = mapOf("User-Agent" to DEFAULT_UA, "Referer" to url)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaFire extraction error: ${e.message}")
+        }
+        null
     }
 
     /**

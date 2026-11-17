@@ -1294,27 +1294,9 @@ fun NafiTvMainApp(
                                 onCheckForUpdates = { checkForUpdates(isManualCheck = true) },
                                 availableUpdateInfo = availableUpdateInfo,
                                 onPlayDirectStream = { url, title ->
-                                    val lowerUrl = url.lowercase().trim()
-                                    val isMovieOrVod = lowerUrl.contains("movielinkbd") ||
-                                            lowerUrl.contains("mlbd") ||
-                                            lowerUrl.contains("fsldownload") ||
-                                            lowerUrl.contains("faststream") ||
-                                            (lowerUrl.contains("/p/") && (lowerUrl.contains("fsldownload") || lowerUrl.contains("faststream"))) ||
-                                            (lowerUrl.contains("/media/") && lowerUrl.contains("token=")) ||
-                                            lowerUrl.contains("pixeldrain") ||
-                                            lowerUrl.contains("drive.google") ||
-                                            lowerUrl.contains("dropbox") ||
-                                            lowerUrl.contains("mediafire") ||
-                                            lowerUrl.contains(".mp4") ||
-                                            lowerUrl.contains(".mkv") ||
-                                            lowerUrl.contains(".webm") ||
-                                            lowerUrl.contains(".avi") ||
-                                            lowerUrl.contains(".mov") ||
-                                            lowerUrl.contains("/movie/") ||
-                                            lowerUrl.contains("/series/") ||
-                                            title.contains("movie", ignoreCase = true) ||
-                                            title.contains("মুভি", ignoreCase = true) ||
-                                            title.contains("film", ignoreCase = true)
+                                    val normalizedUrl = com.example.util.StreamPlaybackSupport.normalizeStreamUrl(url)
+                                    val lowerUrl = normalizedUrl.lowercase()
+                                    val isMovieOrVod = com.example.util.StreamPlaybackSupport.isDirectVodOrWebLink(normalizedUrl, title)
 
                                     val cleanTitle = if (title.isNotBlank()) title else {
                                         if (lowerUrl.contains("movielinkbd") || lowerUrl.contains("fsldownload") || lowerUrl.contains("faststream") || (lowerUrl.contains("/media/") && lowerUrl.contains("token="))) {
@@ -1331,7 +1313,7 @@ fun NafiTvMainApp(
                                          title = cleanTitle,
                                          category = if (isMovieOrVod) "Movies & Videos" else "Direct Stream",
                                          type = if (isMovieOrVod) MediaType.MOVIE else MediaType.LIVE_TV,
-                                         streamUrl = url,
+                                         streamUrl = normalizedUrl,
                                          isLive = !isMovieOrVod
                                     )
                                     selectedMediaItem = directItem
@@ -1754,27 +1736,9 @@ fun NafiTvMainApp(
                             onCheckForUpdates = { checkForUpdates(isManualCheck = true) },
                             availableUpdateInfo = availableUpdateInfo,
                             onPlayDirectStream = { url, title ->
-                                val lowerUrl = url.lowercase().trim()
-                                val isMovieOrVod = lowerUrl.contains("movielinkbd") ||
-                                        lowerUrl.contains("mlbd") ||
-                                        lowerUrl.contains("fsldownload") ||
-                                        lowerUrl.contains("faststream") ||
-                                        (lowerUrl.contains("/p/") && (lowerUrl.contains("fsldownload") || lowerUrl.contains("faststream"))) ||
-                                        (lowerUrl.contains("/media/") && lowerUrl.contains("token=")) ||
-                                        lowerUrl.contains("pixeldrain") ||
-                                        lowerUrl.contains("drive.google") ||
-                                        lowerUrl.contains("dropbox") ||
-                                        lowerUrl.contains("mediafire") ||
-                                        lowerUrl.contains(".mp4") ||
-                                        lowerUrl.contains(".mkv") ||
-                                        lowerUrl.contains(".webm") ||
-                                        lowerUrl.contains(".avi") ||
-                                        lowerUrl.contains(".mov") ||
-                                        lowerUrl.contains("/movie/") ||
-                                        lowerUrl.contains("/series/") ||
-                                        title.contains("movie", ignoreCase = true) ||
-                                        title.contains("মুভি", ignoreCase = true) ||
-                                        title.contains("film", ignoreCase = true)
+                                val normalizedUrl = com.example.util.StreamPlaybackSupport.normalizeStreamUrl(url)
+                                val lowerUrl = normalizedUrl.lowercase()
+                                val isMovieOrVod = com.example.util.StreamPlaybackSupport.isDirectVodOrWebLink(normalizedUrl, title)
 
                                 val cleanTitle = if (title.isNotBlank()) title else {
                                     if (lowerUrl.contains("movielinkbd") || lowerUrl.contains("fsldownload") || lowerUrl.contains("faststream") || (lowerUrl.contains("/media/") && lowerUrl.contains("token="))) {
@@ -1791,7 +1755,7 @@ fun NafiTvMainApp(
                                     title = cleanTitle,
                                     category = if (isMovieOrVod) "Movies & Videos" else "Direct Stream",
                                     type = if (isMovieOrVod) MediaType.MOVIE else MediaType.LIVE_TV,
-                                    streamUrl = url,
+                                    streamUrl = normalizedUrl,
                                     isLive = !isMovieOrVod
                                 )
                                 selectedMediaItem = directItem
@@ -2658,7 +2622,7 @@ fun MenuScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Play Direct Stream / Movie Link (HLS / MP4 / MKV / MovieLinkBD)",
+                            text = "Play Direct Stream / Link (.ts / .m3u8 / .mp4 / .mkv / .mpd / rtsp / Web)",
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -2668,7 +2632,7 @@ fun MenuScreen(
                     OutlinedTextField(
                         value = directUrl,
                         onValueChange = { directUrl = it },
-                        placeholder = { Text("Enter stream or movie URL (m3u8, mp4, mkv, movielinkbd, etc.)", color = Color(0xFF64748B), fontSize = 13.sp) },
+                        placeholder = { Text("Enter any stream or video URL (.ts, .m3u8, .mp4, .mkv, .mpd, rtsp://, YouTube, etc.)", color = Color(0xFF64748B), fontSize = 13.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = customFieldColors(),
                         singleLine = true,
