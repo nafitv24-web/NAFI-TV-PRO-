@@ -287,6 +287,7 @@ fun NafiTvMainApp(
     var breakingNewsText by remember { mutableStateOf("") }
     var isRefreshing by remember { mutableStateOf(true) }
     var currentLoadingStage by remember { mutableStateOf(LoadingStage.IDLE) }
+    var lastSyncedLiveTvUrl by remember { mutableStateOf(repository.getSavedLiveTvM3uUrl()) }
 
     fun checkForUpdates(isManualCheck: Boolean = false) {
         coroutineScope.launch {
@@ -350,7 +351,8 @@ fun NafiTvMainApp(
                         }
                     }
 
-                    // ১. লাইভ টিভি চ্যানেল ও সকল লাইভ প্লেলিস্ট সমান্তরাল + প্রোগ্রেসিভ লোডিং
+                    // ১. লাইভ টিভি: শুধুমাত্র এডমিন প্যানেলের লাইভ টিভি প্লেলিস্ট লিংক (Live TV M3U) + Xtream Live + Firebase Live চ্যানেল
+                    // প্রতিটি এডমিন প্লেলিস্ট আলাদাভাবে সমান্তরালে লোড হয়ে সাথে সাথে স্ক্রিনে আসবে (কোনো একটি স্লো হলে অন্যগুলো আটকাবে না)
                     launch {
                         try {
                             withContext(Dispatchers.Main) { currentLoadingStage = LoadingStage.LIVE_TV }
@@ -375,7 +377,7 @@ fun NafiTvMainApp(
                                 emitMutex.lock()
                                 try {
                                     val now = System.currentTimeMillis()
-                                    if (!force && (now - lastEmitMs) < 120L) return
+                                    if (!force && (now - lastEmitMs) < 90L) return
                                     val snapshot = synchronized(liveBatchesLock) {
                                         val combined = ArrayList<MediaItem>()
                                         liveBatches.values.forEach { combined.addAll(it) }
@@ -402,54 +404,32 @@ fun NafiTvMainApp(
                                 }
                             }
 
-                            val fetchedPlaylistIds = java.util.Collections.synchronizedSet(HashSet<String>())
-                            val localPlaylists = (repository.getAdminPlaylists() + repository.getUserPlaylists() + repository.getInitialPlaylists())
-                                .distinctBy { it.id }
-                                .filterNot {
-                                    deleted.contains(it.id) ||
-                                        repository.isMovieOrVodOnlyPlaylist(it) ||
-                                        repository.isSportsJsonOnlyPlaylist(it)
-                                }
-
-                            // Local playlists already started in parallel at T=0
-                            val localPlaylistJobs = localPlaylists.map { pl ->
-                                fetchedPlaylistIds.add(pl.id)
-                                async {
-                                    val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
-                                        try {
-                                            repository.fetchSinglePlaylistLiveChannelsFast(pl)
-                                                .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                        } catch (_: Exception) {
-                                            emptyList()
-                                        }
-                                    } ?: emptyList()
-                                    if (items.isNotEmpty()) {
-                                        synchronized(liveBatchesLock) { liveBatches["pl_${pl.id}"] = items }
-                                        emitLiveTvProgress()
+                            val launchedLiveTvUrls = java.util.Collections.synchronizedSet(HashSet<String>())
+                            suspend fun fetchAndEmitAdminLiveUrl(singleUrl: String) {
+                                if (!launchedLiveTvUrls.add(singleUrl)) return
+                                val items = kotlinx.coroutines.withTimeoutOrNull(22000L) {
+                                    try {
+                                        repository.fetchSingleLiveTvSourceUrlFast(singleUrl)
+                                            .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                    } catch (_: Exception) {
+                                        emptyList()
                                     }
-                                }
-                            }
-
-                            val tvM3uJob = async {
-                                val items = if (initialLiveTvUrl.isNotBlank()) {
-                                    kotlinx.coroutines.withTimeoutOrNull(18000L) {
-                                        try {
-                                            repository.parseM3uFromUrl(initialLiveTvUrl).map {
-                                                it.copy(type = MediaType.LIVE_TV, isLive = true)
-                                            }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                        } catch (_: Exception) {
-                                            emptyList()
-                                        }
-                                    } ?: emptyList()
-                                } else emptyList()
+                                } ?: emptyList()
                                 if (items.isNotEmpty()) {
-                                    synchronized(liveBatchesLock) { liveBatches["saved_m3u"] = items }
+                                    synchronized(liveBatchesLock) {
+                                        liveBatches["admin_m3u_$singleUrl"] = items
+                                    }
                                     emitLiveTvProgress()
                                 }
                             }
 
+                            val initialAdminUrls = repository.extractUrls(initialLiveTvUrl)
+                            val initialUrlJobs = initialAdminUrls.map { singleUrl ->
+                                async { fetchAndEmitAdminLiveUrl(singleUrl) }
+                            }
+
                             val xtreamLiveJob = async {
-                                val items = kotlinx.coroutines.withTimeoutOrNull(15000L) {
+                                val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
                                     try {
                                         repository.fetchAllXtreamLiveChannels()
                                             .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
@@ -473,63 +453,41 @@ fun NafiTvMainApp(
                                 }
                             }
 
-                            // Fetch any newly synced remote-only Firebase Live TV playlists as soon as fbPlaylistsJob finishes
-                            val remotePlaylistJobs = async {
-                                val fbPl = fbPlaylistsJob.await()
-                                val remoteOnly = fbPl.distinctBy { it.id }.filterNot {
-                                    deleted.contains(it.id) ||
-                                        fetchedPlaylistIds.contains(it.id) ||
-                                        repository.isMovieOrVodOnlyPlaylist(it) ||
-                                        repository.isSportsJsonOnlyPlaylist(it)
+                            // Firebase app_config থেকে আপডেটেড Admin Live TV প্লেলিস্ট এলে কেবল নতুন URL গুলো ফেচ করুন ও মুছে ফেলা URL বাদ দিন
+                            val updatedAppConfigLiveJob = async {
+                                val remoteConfig = appConfigJob.await()
+                                val updatedCombinedUrl = repository.getSavedLiveTvM3uUrl()
+                                withContext(Dispatchers.Main) {
+                                    lastSyncedLiveTvUrl = updatedCombinedUrl
                                 }
-                                if (remoteOnly.isNotEmpty()) {
-                                    remoteOnly.map { pl ->
-                                        fetchedPlaylistIds.add(pl.id)
-                                        async {
-                                            val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
-                                                try {
-                                                    repository.fetchSinglePlaylistLiveChannelsFast(pl)
-                                                        .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                                } catch (_: Exception) {
-                                                    emptyList()
-                                                }
-                                            } ?: emptyList()
-                                            if (items.isNotEmpty()) {
-                                                synchronized(liveBatchesLock) { liveBatches["pl_${pl.id}"] = items }
-                                                emitLiveTvProgress()
+                                val latestAdminUrls = repository.extractUrls(updatedCombinedUrl)
+                                if (remoteConfig != null) {
+                                    val activeKeys = latestAdminUrls.map { "admin_m3u_$it" }.toSet()
+                                    synchronized(liveBatchesLock) {
+                                        val iter = liveBatches.keys.iterator()
+                                        while (iter.hasNext()) {
+                                            val k = iter.next()
+                                            if (k.startsWith("admin_m3u_") && !activeKeys.contains(k)) {
+                                                iter.remove()
                                             }
                                         }
-                                    }.awaitAll()
-                                }
-
-                                // If remote Firebase app_config supplied a different Live TV M3U URL, fetch it too
-                                appConfigJob.await()
-                                val updatedLiveTvUrl = repository.getSavedLiveTvM3uUrl()
-                                if (updatedLiveTvUrl.isNotBlank() && updatedLiveTvUrl != initialLiveTvUrl) {
-                                    val updatedItems = kotlinx.coroutines.withTimeoutOrNull(18000L) {
-                                        try {
-                                            repository.parseM3uFromUrl(updatedLiveTvUrl).map {
-                                                it.copy(type = MediaType.LIVE_TV, isLive = true)
-                                            }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                        } catch (_: Exception) {
-                                            emptyList()
-                                        }
-                                    } ?: emptyList()
-                                    if (updatedItems.isNotEmpty()) {
-                                        synchronized(liveBatchesLock) { liveBatches["saved_m3u"] = updatedItems }
-                                        emitLiveTvProgress()
                                     }
+                                }
+                                val newlyDiscovered = latestAdminUrls.filterNot { launchedLiveTvUrls.contains(it) }
+                                if (newlyDiscovered.isNotEmpty()) {
+                                    newlyDiscovered.map { newUrl ->
+                                        async { fetchAndEmitAdminLiveUrl(newUrl) }
+                                    }.awaitAll()
                                 }
                             }
 
-                            localPlaylistJobs.awaitAll()
-                            tvM3uJob.await()
+                            initialUrlJobs.awaitAll()
                             xtreamLiveJob.await()
                             fbTvApplyJob.await()
-                            remotePlaylistJobs.await()
+                            updatedAppConfigLiveJob.await()
 
                             emitLiveTvProgress(force = true)
-                            val finalToCache = liveTvList
+                            val finalToCache = withContext(Dispatchers.Main) { liveTvList }
                             if (finalToCache.isNotEmpty()) {
                                 repository.saveCachedLiveTvChannels(finalToCache)
                             }
@@ -943,6 +901,11 @@ fun NafiTvMainApp(
                 val hubMovies = repository.getAllCachedPlaylistAndXtreamMovies().filterNot { deleted.contains(it.id) }
                 moviesList = (hubMovies + cachedMov + repository.getInitialMoviesSeries()).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
                 favoriteIds = repository.getFavoriteIds()
+                val updatedLiveTvUrl = repository.getSavedLiveTvM3uUrl()
+                if (updatedLiveTvUrl != lastSyncedLiveTvUrl) {
+                    lastSyncedLiveTvUrl = updatedLiveTvUrl
+                    refreshAllData()
+                }
             }
         )
     } else {

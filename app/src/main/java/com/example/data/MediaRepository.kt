@@ -788,14 +788,17 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getCachedLiveTvChannels(): List<MediaItem> {
-        val list = loadListFromFileCache("cache_livetv_v3.json").filterNot { isDemoChannel(it) }
+        val list = loadListFromFileCache("cache_livetv_v4.json").filterNot { isDemoChannel(it) }
         if (list.isNotEmpty()) return list
-        val oldList = loadListFromFileCache("cache_livetv_v2.json").filterNot { isDemoChannel(it) }
-        if (oldList.isNotEmpty()) {
-            saveCachedLiveTvChannels(oldList)
-            try { java.io.File(context.filesDir, "cache_livetv_v2.json").delete() } catch (_: Exception) {}
-        }
-        return oldList
+        // Clean legacy v2/v3 caches that may have contained mixed playlist-tab entries
+        try {
+            val mediaCacheDir = java.io.File(context.cacheDir, "media_cache")
+            java.io.File(mediaCacheDir, "cache_livetv_v3.json").delete()
+            java.io.File(mediaCacheDir, "cache_livetv_v2.json").delete()
+            java.io.File(context.filesDir, "cache_livetv_v3.json").delete()
+            java.io.File(context.filesDir, "cache_livetv_v2.json").delete()
+        } catch (_: Exception) {}
+        return emptyList()
     }
 
     fun isDemoChannel(item: MediaItem): Boolean {
@@ -847,7 +850,7 @@ class MediaRepository(private val context: Context) {
     }
 
     fun saveCachedLiveTvChannels(list: List<MediaItem>) {
-        saveListToFileCache("cache_livetv_v3.json", list.filterNot { isDemoChannel(it) })
+        saveListToFileCache("cache_livetv_v4.json", list.filterNot { isDemoChannel(it) })
     }
 
     fun saveCachedMoviesList(list: List<MediaItem>) {
@@ -1224,87 +1227,50 @@ class MediaRepository(private val context: Context) {
         return mergedByKey.values.toList()
     }
 
-    fun getCachedLiveTvFromAllPlaylists(): List<MediaItem> {
-        val allLivePlaylists = (getAdminPlaylists() + getUserPlaylists() + getInitialPlaylists())
-            .distinctBy { it.id }
-            .filterNot { isMovieOrVodOnlyPlaylist(it) || isSportsJsonOnlyPlaylist(it) }
-        if (allLivePlaylists.isEmpty()) return emptyList()
-        val combined = mutableListOf<MediaItem>()
-        for (pl in allLivePlaylists) {
-            val cached = getCachedPlaylistChannels(pl.id)
-            if (cached.isNotEmpty()) {
-                combined.addAll(extractLiveChannelsFromPlaylistItems(cached))
-            }
-        }
-        return combined
-    }
+    /**
+     * Fetches a single Admin Panel Live TV playlist URL (M3U, JSON, or Xtream URL)
+     * as fast as possible using pooled HTTP connections, without pulling from the Playlist tab.
+     */
+    suspend fun fetchSingleLiveTvSourceUrlFast(rawUrl: String): List<MediaItem> = withContext(Dispatchers.IO) {
+        val cleanUrl = rawUrl.trim()
+        if (cleanUrl.isBlank()) return@withContext emptyList()
+        val deleted = getDeletedIds()
 
-    suspend fun fetchSinglePlaylistLiveChannelsFast(playlist: PlaylistInfo): List<MediaItem> = withContext(Dispatchers.IO) {
-        if (isMovieOrVodOnlyPlaylist(playlist) || isSportsJsonOnlyPlaylist(playlist)) {
-            return@withContext emptyList()
-        }
-        val cached = getCachedPlaylistChannels(playlist.id)
-
-        // Xtream playlists: fetch ONLY live streams (fast!) instead of pulling 30k VOD movies & series
-        val explicitXtream = !playlist.serverUrl.isNullOrBlank() && !playlist.username.isNullOrBlank() && !playlist.password.isNullOrBlank()
-        val urlCreds = if (!explicitXtream && playlist.url.isNotBlank()) parseXtreamCredentials(playlist.url) else null
-        if (explicitXtream || urlCreds != null) {
-            val srv = if (explicitXtream) playlist.serverUrl!! else urlCreds!!.first
-            val usr = if (explicitXtream) playlist.username!! else urlCreds!!.second
-            val pwd = if (explicitXtream) playlist.password!! else urlCreds!!.third
-            val liveItems = try {
-                fetchXtreamLiveStreamsOnly(srv, usr, pwd)
+        val xtreamCreds = parseXtreamCredentials(cleanUrl)
+        if (xtreamCreds != null) {
+            val xtreamItems = try {
+                fetchXtreamLiveStreamsOnly(xtreamCreds.first, xtreamCreds.second, xtreamCreds.third)
             } catch (_: Exception) {
                 emptyList()
             }
-            if (liveItems.isNotEmpty()) {
-                if (cached.isEmpty()) {
-                    saveCachedPlaylistChannels(playlist.id, liveItems)
-                }
-                return@withContext extractLiveChannelsFromPlaylistItems(liveItems)
+            if (xtreamItems.isNotEmpty()) {
+                return@withContext xtreamItems.filterNot { deleted.contains(it.id) || isItemDeleted(it) || isDemoChannel(it) }
             }
-            return@withContext extractLiveChannelsFromPlaylistItems(cached)
         }
 
-        if (playlist.url.isNotBlank()) {
-            val fetched = try {
-                if (playlist.url.endsWith(".json", ignoreCase = true) || playlist.url.contains(".json?", ignoreCase = true)) {
-                    val req = Request.Builder()
-                        .url(playlist.url.trim())
-                        .header("User-Agent", "NAFITV24/3.1.5 (Android ExoPlayer)")
-                        .build()
-                    fastM3uClient.newCall(req).execute().use { resp ->
-                        if (resp.isSuccessful) {
-                            parseMediaFromJsonString(
-                                resp.body?.string().orEmpty(),
-                                defaultCategory = playlist.title.ifBlank { "Live TV" },
-                                defaultType = MediaType.LIVE_TV
-                            )
-                        } else emptyList()
-                    }
-                } else {
-                    parseM3uFromUrl(playlist.url)
-                }
-            } catch (_: Exception) {
-                emptyList()
-            }
-            if (fetched.isNotEmpty()) {
-                saveCachedPlaylistChannels(playlist.id, fetched)
-                return@withContext extractLiveChannelsFromPlaylistItems(fetched)
-            }
+        val fetched = try {
+            fetchSingleM3uUrl(cleanUrl)
+        } catch (_: Exception) {
+            emptyList()
         }
-        extractLiveChannelsFromPlaylistItems(cached)
+        if (fetched.isEmpty()) return@withContext emptyList()
+
+        val result = ArrayList<MediaItem>(fetched.size)
+        for (item in fetched) {
+            if (deleted.contains(item.id) || isItemDeleted(item) || isDemoChannel(item)) continue
+            if (isVodMediaItem(item)) continue
+            result.add(item.copy(type = MediaType.LIVE_TV, isLive = true))
+        }
+        result
     }
 
     fun getInitialLiveTv(): List<MediaItem> {
         val customTv = getCustomStreams().filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }
             .filterNot { isItemDeleted(it) || isDemoChannel(it) }
         val cached = getCachedLiveTvChannels().filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val playlistCached = getCachedLiveTvFromAllPlaylists()
         val combined = mutableListOf<MediaItem>()
         combined.addAll(customTv)
         combined.addAll(cached)
-        combined.addAll(playlistCached)
         if (combined.isEmpty()) {
             combined.addAll(getDefaultBuiltinLiveTv())
         }
@@ -1476,10 +1442,11 @@ class MediaRepository(private val context: Context) {
     fun resetToDefaults() {
         prefs.edit().clear().apply()
         try {
-            java.io.File(context.filesDir, "cache_livetv_v2.json").delete()
-            java.io.File(context.filesDir, "cache_livetv_v3.json").delete()
-            java.io.File(context.filesDir, "cache_sports_v2.json").delete()
-            java.io.File(context.filesDir, "cache_movies_v2.json").delete()
+            val mediaCacheDir = java.io.File(context.cacheDir, "media_cache")
+            listOf("cache_livetv_v2.json", "cache_livetv_v3.json", "cache_livetv_v4.json", "cache_sports_v2.json", "cache_movies_v2.json").forEach { name ->
+                java.io.File(mediaCacheDir, name).delete()
+                java.io.File(context.filesDir, name).delete()
+            }
         } catch (_: Exception) {}
     }
 
@@ -2043,7 +2010,7 @@ class MediaRepository(private val context: Context) {
                     }
                 }
             } else if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
-                if (items.size >= 2500) break
+                if (items.size >= 6000) break
                 var streamUrl = trimmed
                 val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
                     rawUrl = streamUrl,
@@ -5893,23 +5860,29 @@ class MediaRepository(private val context: Context) {
     }
 
     fun saveLiveTvM3uUrl(url: String) {
-        prefs.edit().putString("saved_live_tv_m3u_url", url).apply()
-        memoryFileCache.remove("cache_livetv_v3.json")
+        val normalized = url.trim()
+        val previous = prefs.getString("saved_live_tv_m3u_url", null)?.trim()
+        if (previous == normalized) return
+        prefs.edit().putString("saved_live_tv_m3u_url", normalized).apply()
+        memoryFileCache.remove("cache_livetv_v4.json")
         cachedBuiltinLiveTv = null
-        try { java.io.File(context.filesDir, "cache_livetv_v3.json").delete() } catch (_: Exception) {}
+        try {
+            java.io.File(java.io.File(context.cacheDir, "media_cache"), "cache_livetv_v4.json").delete()
+            java.io.File(context.filesDir, "cache_livetv_v4.json").delete()
+        } catch (_: Exception) {}
     }
 
     fun getSavedLiveTvM3uUrl(): String {
         val current = prefs.getString("saved_live_tv_m3u_url", DEFAULT_LIVE_TV_M3U_URL) ?: DEFAULT_LIVE_TV_M3U_URL
         val updateChannelUrl = "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/Update%20Channel.m3u"
 
-        val urls = mutableSetOf<String>()
+        val urls = linkedSetOf<String>()
         urls.add(updateChannelUrl)
-        if (current.isNotBlank() && !current.contains("Nafitv24.m3u")) {
+        if (current.isNotBlank()) {
             current.split(Regex("[\r\n,;]+"))
                 .map { it.trim() }
                 .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
-                .filterNot { it.contains("Sports%20Channel%20NF.m3u") }
+                .filterNot { it.contains("Sports%20Channel%20NF.m3u") || it.contains("Nafitv24.m3u", ignoreCase = true) }
                 .forEach { urls.add(it) }
         }
         return urls.joinToString("\n")
@@ -6707,16 +6680,16 @@ class MediaRepository(private val context: Context) {
         var remoteTapmadJson: String? = null
 
         coroutineScope {
-            // 1. Fetch from Firestore (Authoritative Cloud Source)
+            // 1. Fetch from Firestore in parallel (all databases & document paths in 1 round-trip)
             val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val docPaths = listOf("settings/app_config", "app_config/global_config")
             val fsJobs = databases.map { dbId ->
-                async {
-                    var fsLiveTv: String? = null
-                    var fsSports: String? = null
-                    var fsMovies: String? = null
-                    var fsTapmad: String? = null
-                    val docPaths = listOf("settings/app_config", "app_config/global_config")
-                    for (docPath in docPaths) {
+                docPaths.map { docPath ->
+                    async {
+                        var fsLiveTv: String? = null
+                        var fsSports: String? = null
+                        var fsMovies: String? = null
+                        var fsTapmad: String? = null
                         try {
                             val (ok, body) = executeFirestoreRequest(dbId, docPath, "GET")
                             if (ok && body.isNotBlank() && body.startsWith("{")) {
@@ -6737,10 +6710,10 @@ class MediaRepository(private val context: Context) {
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
+                        listOf(fsLiveTv, fsSports, fsMovies, fsTapmad)
                     }
-                    listOf(fsLiveTv, fsSports, fsMovies, fsTapmad)
                 }
-            }
+            }.flatten()
 
             // 2. Fetch from RTDB (Fallback / Mirror)
             val rtdbJob = async {

@@ -28,23 +28,19 @@ class LiveTvPlaylistUnificationTest {
         context = ApplicationProvider.getApplicationContext()
         MediaRepository.clearMemoryCaches()
         context.getSharedPreferences("nafitv_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+        context.filesDir.listFiles()?.forEach { file ->
+            if (file.name.startsWith("cache_")) {
+                file.delete()
+            }
+        }
+        java.io.File(context.cacheDir, "media_cache").listFiles()?.forEach { file ->
+            file.delete()
+        }
         repository = MediaRepository(context)
     }
 
     @Test
-    fun `playlist classification excludes movie and sports json playlists from live tv`() {
-        val toffeePl = PlaylistInfo(id = "pl_toffee_1", title = "Toffee 1", url = "https://example.com/toffee.m3u", type = "M3U")
-        val moviePl = PlaylistInfo(id = "pl_ott_1", title = "NAFI OTT", url = "https://example.com/movies.m3u", type = "MOVIE", isMovieOnly = true)
-        val fancodePl = PlaylistInfo(id = "pl_fancode", title = "FanCode", url = "https://example.com/fancode.json", type = "M3U")
-
-        assertFalse(repository.isMovieOrVodOnlyPlaylist(toffeePl))
-        assertFalse(repository.isSportsJsonOnlyPlaylist(toffeePl))
-        assertTrue(repository.isMovieOrVodOnlyPlaylist(moviePl))
-        assertTrue(repository.isSportsJsonOnlyPlaylist(fancodePl))
-    }
-
-    @Test
-    fun `getInitialLiveTv includes cached channels from live playlists including drama live channels but excludes mp4 vod`() {
+    fun `getInitialLiveTv strictly excludes Playlist tab channels`() {
         val toffeePl = PlaylistInfo(
             id = "pl_toffee_1",
             title = "Toffee 1",
@@ -53,67 +49,86 @@ class LiveTvPlaylistUnificationTest {
             isAdmin = true
         )
         repository.saveAdminPlaylist(toffeePl)
-
-        val toffeeChannels = listOf(
-            MediaItem(
-                id = "t1",
-                title = "Toffee TV",
-                category = "Family",
-                type = MediaType.LIVE_TV,
-                streamUrl = "https://cdn.example.com/toffee_tv.m3u8",
-                isLive = true
-            ),
-            MediaItem(
-                id = "t2",
-                title = "Sony SAB HD",
-                category = "Family",
-                type = MediaType.LIVE_TV,
-                streamUrl = "https://cdn.example.com/sony_sab.m3u8",
-                isLive = true
-            ),
-            MediaItem(
-                id = "t3",
-                title = "Sony YAY",
-                category = "Family",
-                type = MediaType.LIVE_TV,
-                streamUrl = "https://cdn.example.com/sony_yay.ts",
-                isLive = true
-            ),
-            MediaItem(
-                id = "t4",
-                title = "Zee Bangla Cinema TV",
-                category = "Drama",
-                type = MediaType.SERIES, // Even if previously cached as SERIES without VOD URL
-                streamUrl = "https://bldcmprod-cdn.toffeelive.com/live/zee.m3u8",
-                isLive = false
-            ),
-            MediaItem(
-                id = "t5_vod",
-                title = "Sample Movie MP4",
-                category = "Movies",
-                type = MediaType.MOVIE,
-                streamUrl = "https://cdn.example.com/movie/sample.mp4",
-                isLive = false
+        repository.saveCachedPlaylistChannels(
+            toffeePl.id,
+            listOf(
+                MediaItem(
+                    id = "playlist_only_toffee_tv",
+                    title = "Playlist Exclusive Toffee TV",
+                    category = "Family",
+                    type = MediaType.LIVE_TV,
+                    streamUrl = "https://cdn.example.com/toffee_exclusive.m3u8",
+                    isLive = true
+                )
             )
         )
-        repository.saveCachedPlaylistChannels(toffeePl.id, toffeeChannels)
+
+        val liveTvFromAdminSource = listOf(
+            MediaItem(
+                id = "admin_tv_1",
+                title = "Admin Channel One",
+                category = "Live TV",
+                type = MediaType.LIVE_TV,
+                streamUrl = "https://cdn.example.com/admin_one.m3u8",
+                isLive = true
+            )
+        )
+        repository.saveCachedLiveTvChannels(liveTvFromAdminSource)
 
         val initialLiveTv = repository.getInitialLiveTv()
         val titles = initialLiveTv.map { it.title }.toSet()
 
-        assertTrue(titles.contains("Toffee TV"))
-        assertTrue(titles.contains("Sony SAB HD"))
-        assertTrue(titles.contains("Sony YAY"))
-        assertTrue(titles.contains("Zee Bangla Cinema TV"))
-        assertFalse(titles.contains("Sample Movie MP4"))
-
-        val dramaLive = initialLiveTv.first { it.title == "Zee Bangla Cinema TV" }
-        assertEquals(MediaType.LIVE_TV, dramaLive.type)
-        assertTrue(dramaLive.isLive)
+        assertTrue(titles.contains("Admin Channel One"))
+        assertFalse(titles.contains("Playlist Exclusive Toffee TV"))
     }
 
     @Test
-    fun `mergeLiveTvChannelsFast preserves all unique channels and combines servers across playlists`() {
+    fun `saveLiveTvM3uUrl preserves cache when unchanged and invalidates only when modified`() {
+        val urlSet1 = "https://example.com/live1.m3u\nhttps://example.com/live2.m3u"
+        repository.saveLiveTvM3uUrl(urlSet1)
+        repository.saveCachedLiveTvChannels(
+            listOf(
+                MediaItem(
+                    id = "ch_cached_1",
+                    title = "Cached Admin Channel",
+                    category = "Sports",
+                    type = MediaType.LIVE_TV,
+                    streamUrl = "https://cdn.example.com/cached.m3u8",
+                    isLive = true
+                )
+            )
+        )
+
+        // Calling save with the exact same URL set (e.g. during Firebase app_config sync) must keep disk cache intact
+        repository.saveLiveTvM3uUrl(urlSet1)
+        assertEquals(1, repository.getCachedLiveTvChannels().size)
+
+        // Modifying the Admin Live TV URLs must clear stale cache
+        repository.saveLiveTvM3uUrl("$urlSet1\nhttps://example.com/live3.m3u")
+        assertTrue(repository.getCachedLiveTvChannels().isEmpty())
+    }
+
+    @Test
+    fun `getSavedLiveTvM3uUrl keeps multiple Admin Live TV URLs while filtering legacy broken entries`() {
+        val adminInput = listOf(
+            "https://example.com/Nafitv24.m3u",
+            "https://example.com/bd_channels.m3u",
+            "https://example.com/sports_tv.m3u;https://example.com/news_tv.m3u|User-Agent=CustomAgent",
+            "https://example.com/Sports%20Channel%20NF.m3u"
+        ).joinToString("\n")
+
+        repository.saveLiveTvM3uUrl(adminInput)
+        val extracted = repository.extractUrls(repository.getSavedLiveTvM3uUrl())
+
+        assertTrue(extracted.any { it.contains("bd_channels.m3u") })
+        assertTrue(extracted.any { it.contains("sports_tv.m3u") })
+        assertTrue(extracted.any { it.contains("news_tv.m3u|User-Agent=CustomAgent") })
+        assertFalse(extracted.any { it.contains("Nafitv24.m3u", ignoreCase = true) })
+        assertFalse(extracted.any { it.contains("Sports%20Channel%20NF.m3u") })
+    }
+
+    @Test
+    fun `mergeLiveTvChannelsFast preserves all unique channels and combines servers across Admin Live TV playlists`() {
         val chPl1 = MediaItem(
             id = "p1_sony",
             title = "Sony SAB HD",
