@@ -67,6 +67,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
@@ -276,7 +277,11 @@ fun NafiTvMainApp(
     var customList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val allLiveChannels = remember(liveTvList, customList, m3uList) {
-        liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
+        repository.mergeLiveTvChannelsFast(
+            liveTvList +
+                customList.filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) } +
+                m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
+        )
     }
     var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var breakingNewsText by remember { mutableStateOf("") }
@@ -315,82 +320,218 @@ fun NafiTvMainApp(
             try {
                 val deleted = repository.getDeletedIds()
 
-                // Step 0: Sync Remote App Config immediately
-                try {
-                    repository.fetchAppConfigFromFirebase()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-
                 // -------------------------------------------------------------
-                // সমান্তরাল দ্রুত লোডিং (Ultra-Fast Concurrent Staged Loading)
-                // সকল ট্যাব (লাইভ টিভি, লাইভ ইভেন্ট, মুভি ও প্লেলিস্ট) একসাথে লোড হবে যেন কোনো বিলম্ব না হয়
+                // আল্ট্রা-ফাস্ট সমান্তরাল লোডিং (Zero-Delay Progressive Concurrent Loading)
+                // রিমোট কনফিগ, ফায়ারবেস প্লেলিস্ট, Xtream ও M3U একসাথে লোড হয়ে সাথে সাথে Live TV তে যুক্ত হবে
                 // -------------------------------------------------------------
+                val initialLiveTvUrl = repository.getSavedLiveTvM3uUrl()
                 kotlinx.coroutines.coroutineScope {
-                    // ১. লাইভ টিভি চ্যানেল সমান্তরাল লোডিং (Live TV)
+                    val appConfigJob = async {
+                        try {
+                            repository.fetchAppConfigFromFirebase()
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+
+                    val fbPlaylistsJob = async {
+                        try {
+                            repository.fetchPlaylistsFromFirebase()
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }
+
+                    val fbItemsJob = async {
+                        try {
+                            repository.fetchFromFirebase().filterNot { deleted.contains(it.id) }
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }
+
+                    // ১. লাইভ টিভি চ্যানেল ও সকল লাইভ প্লেলিস্ট সমান্তরাল + প্রোগ্রেসিভ লোডিং
                     launch {
                         try {
                             withContext(Dispatchers.Main) { currentLoadingStage = LoadingStage.LIVE_TV }
-                            val liveTvM3uUrl = repository.getSavedLiveTvM3uUrl()
-                            val tvM3uJob = async {
-                                if (liveTvM3uUrl.isNotBlank()) {
-                                    kotlinx.coroutines.withTimeoutOrNull(25000) {
+
+                            val liveBatchesLock = Any()
+                            val liveBatches = LinkedHashMap<String, List<MediaItem>>()
+                            val builtinTv = repository.getDefaultBuiltinLiveTv()
+                            val customTv = repository.getCustomStreams()
+                                .filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }
+                                .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+
+                            synchronized(liveBatchesLock) {
+                                if (customTv.isNotEmpty()) liveBatches["custom"] = customTv
+                            }
+
+                            val initialTvBaseline = withContext(Dispatchers.Main) {
+                                liveTvList.filterNot { repository.isDemoChannel(it) }
+                            }
+                            val emitMutex = kotlinx.coroutines.sync.Mutex()
+                            var lastEmitMs = 0L
+                            suspend fun emitLiveTvProgress(force: Boolean = false) {
+                                emitMutex.lock()
+                                try {
+                                    val now = System.currentTimeMillis()
+                                    if (!force && (now - lastEmitMs) < 120L) return
+                                    val snapshot = synchronized(liveBatchesLock) {
+                                        val combined = ArrayList<MediaItem>()
+                                        liveBatches.values.forEach { combined.addAll(it) }
+                                        combined
+                                    }
+                                    if (snapshot.isEmpty() && !force) return
+                                    lastEmitMs = now
+                                    val merged = if (force) {
+                                        if (snapshot.isNotEmpty()) {
+                                            repository.mergeLiveTvChannelsFast(snapshot + builtinTv)
+                                        } else {
+                                            repository.mergeLiveTvChannelsFast(initialTvBaseline.ifEmpty { builtinTv })
+                                        }
+                                    } else {
+                                        repository.mergeLiveTvChannelsFast(snapshot + initialTvBaseline)
+                                    }
+                                    if (merged.isNotEmpty()) {
+                                        withContext(Dispatchers.Main) {
+                                            liveTvList = merged
+                                        }
+                                    }
+                                } finally {
+                                    emitMutex.unlock()
+                                }
+                            }
+
+                            val fetchedPlaylistIds = java.util.Collections.synchronizedSet(HashSet<String>())
+                            val localPlaylists = (repository.getAdminPlaylists() + repository.getUserPlaylists() + repository.getInitialPlaylists())
+                                .distinctBy { it.id }
+                                .filterNot {
+                                    deleted.contains(it.id) ||
+                                        repository.isMovieOrVodOnlyPlaylist(it) ||
+                                        repository.isSportsJsonOnlyPlaylist(it)
+                                }
+
+                            // Local playlists already started in parallel at T=0
+                            val localPlaylistJobs = localPlaylists.map { pl ->
+                                fetchedPlaylistIds.add(pl.id)
+                                async {
+                                    val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
                                         try {
-                                            repository.parseM3uFromUrl(liveTvM3uUrl).map {
+                                            repository.fetchSinglePlaylistLiveChannelsFast(pl)
+                                                .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                        } catch (_: Exception) {
+                                            emptyList()
+                                        }
+                                    } ?: emptyList()
+                                    if (items.isNotEmpty()) {
+                                        synchronized(liveBatchesLock) { liveBatches["pl_${pl.id}"] = items }
+                                        emitLiveTvProgress()
+                                    }
+                                }
+                            }
+
+                            val tvM3uJob = async {
+                                val items = if (initialLiveTvUrl.isNotBlank()) {
+                                    kotlinx.coroutines.withTimeoutOrNull(18000L) {
+                                        try {
+                                            repository.parseM3uFromUrl(initialLiveTvUrl).map {
                                                 it.copy(type = MediaType.LIVE_TV, isLive = true)
                                             }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                        } catch (_: Exception) { emptyList() }
+                                        } catch (_: Exception) {
+                                            emptyList()
+                                        }
                                     } ?: emptyList()
                                 } else emptyList()
+                                if (items.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) { liveBatches["saved_m3u"] = items }
+                                    emitLiveTvProgress()
+                                }
                             }
 
                             val xtreamLiveJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(20000) {
+                                val items = kotlinx.coroutines.withTimeoutOrNull(15000L) {
                                     try {
-                                        repository.fetchAllXtreamLiveChannels().filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                    } catch (_: Exception) { emptyList() }
+                                        repository.fetchAllXtreamLiveChannels()
+                                            .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                    } catch (_: Exception) {
+                                        emptyList()
+                                    }
                                 } ?: emptyList()
-                            }
-
-                            val fbTvJob = async {
-                                try {
-                                    repository.fetchFromFirebase().filter { it.type == MediaType.LIVE_TV }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                } catch (_: Exception) { emptyList() }
-                            }
-
-                            val customTv = repository.getCustomStreams().filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                            val tvM3u = tvM3uJob.await()
-                            val xtreamLiveChannels = xtreamLiveJob.await()
-                            val fbTv = fbTvJob.await()
-
-                            val combinedTv = mutableListOf<MediaItem>()
-                            combinedTv.addAll(customTv)
-                            combinedTv.addAll(fbTv)
-                            combinedTv.addAll(tvM3u.filterNot { repository.isDemoChannel(it) })
-                            combinedTv.addAll(xtreamLiveChannels.filterNot { repository.isDemoChannel(it) })
-
-                            val builtinTv = repository.getDefaultBuiltinLiveTv()
-                            val sourceTvList = if (combinedTv.isNotEmpty()) {
-                                (combinedTv + builtinTv).distinctBy { it.title.trim().lowercase() }
-                            } else {
-                                val currentLoaded = liveTvList.filterNot { repository.isDemoChannel(it) }
-                                if (currentLoaded.isNotEmpty()) currentLoaded else builtinTv
-                            }
-                            val seenTvIds = HashSet<String>()
-                            val updatedTv = sourceTvList.filterNot { repository.isDemoChannel(it) }.mapIndexed { idx, ch ->
-                                var uid = ch.id.ifBlank { "tv_${idx}_${Math.abs(ch.title.hashCode())}" }
-                                if (seenTvIds.contains(uid)) {
-                                    uid = "${uid}_$idx"
+                                if (items.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) { liveBatches["xtream_live"] = items }
+                                    emitLiveTvProgress()
                                 }
-                                seenTvIds.add(uid)
-                                ch.copy(id = uid)
                             }
 
-                            if (updatedTv.isNotEmpty()) {
-                                withContext(Dispatchers.Main) {
-                                    liveTvList = updatedTv
+                            val fbTvApplyJob = async {
+                                val fbTv = fbItemsJob.await()
+                                    .filter { it.type == MediaType.LIVE_TV }
+                                    .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                if (fbTv.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) { liveBatches["fb_tv"] = fbTv }
+                                    emitLiveTvProgress()
                                 }
-                                repository.saveCachedLiveTvChannels(updatedTv)
+                            }
+
+                            // Fetch any newly synced remote-only Firebase Live TV playlists as soon as fbPlaylistsJob finishes
+                            val remotePlaylistJobs = async {
+                                val fbPl = fbPlaylistsJob.await()
+                                val remoteOnly = fbPl.distinctBy { it.id }.filterNot {
+                                    deleted.contains(it.id) ||
+                                        fetchedPlaylistIds.contains(it.id) ||
+                                        repository.isMovieOrVodOnlyPlaylist(it) ||
+                                        repository.isSportsJsonOnlyPlaylist(it)
+                                }
+                                if (remoteOnly.isNotEmpty()) {
+                                    remoteOnly.map { pl ->
+                                        fetchedPlaylistIds.add(pl.id)
+                                        async {
+                                            val items = kotlinx.coroutines.withTimeoutOrNull(18000L) {
+                                                try {
+                                                    repository.fetchSinglePlaylistLiveChannelsFast(pl)
+                                                        .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                                } catch (_: Exception) {
+                                                    emptyList()
+                                                }
+                                            } ?: emptyList()
+                                            if (items.isNotEmpty()) {
+                                                synchronized(liveBatchesLock) { liveBatches["pl_${pl.id}"] = items }
+                                                emitLiveTvProgress()
+                                            }
+                                        }
+                                    }.awaitAll()
+                                }
+
+                                // If remote Firebase app_config supplied a different Live TV M3U URL, fetch it too
+                                appConfigJob.await()
+                                val updatedLiveTvUrl = repository.getSavedLiveTvM3uUrl()
+                                if (updatedLiveTvUrl.isNotBlank() && updatedLiveTvUrl != initialLiveTvUrl) {
+                                    val updatedItems = kotlinx.coroutines.withTimeoutOrNull(18000L) {
+                                        try {
+                                            repository.parseM3uFromUrl(updatedLiveTvUrl).map {
+                                                it.copy(type = MediaType.LIVE_TV, isLive = true)
+                                            }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                        } catch (_: Exception) {
+                                            emptyList()
+                                        }
+                                    } ?: emptyList()
+                                    if (updatedItems.isNotEmpty()) {
+                                        synchronized(liveBatchesLock) { liveBatches["saved_m3u"] = updatedItems }
+                                        emitLiveTvProgress()
+                                    }
+                                }
+                            }
+
+                            localPlaylistJobs.awaitAll()
+                            tvM3uJob.await()
+                            xtreamLiveJob.await()
+                            fbTvApplyJob.await()
+                            remotePlaylistJobs.await()
+
+                            emitLiveTvProgress(force = true)
+                            val finalToCache = liveTvList
+                            if (finalToCache.isNotEmpty()) {
+                                repository.saveCachedLiveTvChannels(finalToCache)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -510,38 +651,30 @@ fun NafiTvMainApp(
                             val initialPlaylists = repository.getInitialPlaylists().filterNot { deleted.contains(it.id) }
                             val adminPlaylists = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
                             val userPlaylists = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
-                            val fbPlaylists = try { repository.fetchPlaylistsFromFirebase() } catch (_: Exception) { emptyList() }
+                            val fbPlaylists = fbPlaylistsJob.await()
                             val allPlaylists = (fbPlaylists + adminPlaylists + userPlaylists + initialPlaylists)
                                 .distinctBy { it.id }
                                 .filterNot { deleted.contains(it.id) }
 
                             withContext(Dispatchers.Main) {
                                 adminPlaylistsList = allPlaylists
-                                playlistsList = allPlaylists.filterNot {
-                                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
-                                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
-                                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-                                }
+                                playlistsList = allPlaylists.filterNot { repository.isMovieOrVodOnlyPlaylist(it) }
                             }
 
-                            // Firebase extra items
+                            // Apply shared Firebase extra items for Events and Movies (Live TV already applied inside Task 1)
                             try {
-                                val fbItems = try { repository.fetchFromFirebase().filterNot { deleted.contains(it.id) } } catch (_: Exception) { emptyList() }
+                                val fbItems = fbItemsJob.await()
                                 val fbSports = fbItems.filter { it.type == MediaType.LIVE_EVENT }
-                                val fbTv = fbItems.filter { it.type == MediaType.LIVE_TV }
                                 val fbMov = fbItems.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES }
 
                                 val newSports = if (fbSports.isNotEmpty()) (fbSports + sportsList).distinctBy { it.id }.filterNot { repository.isItemDeleted(it) } else null
-                                val newTv = if (fbTv.isNotEmpty()) (liveTvList + fbTv).distinctBy { it.id }.filterNot { deleted.contains(it.id) } else null
                                 val newMov = if (fbMov.isNotEmpty()) (moviesList + fbMov).distinctBy { it.id }.filterNot { deleted.contains(it.id) }.sortedByDescending { it.movieSortWeight } else null
 
                                 withContext(Dispatchers.Main) {
                                     if (newSports != null) sportsList = newSports
-                                    if (newTv != null) liveTvList = newTv
                                     if (newMov != null) moviesList = newMov
                                 }
                                 if (newSports != null) repository.saveCachedSportsMatches(newSports)
-                                if (newTv != null) repository.saveCachedLiveTvChannels(newTv)
                                 if (newMov != null) repository.saveCachedMoviesList(newMov)
                             } catch (_: Exception) {}
 
@@ -643,10 +776,10 @@ fun NafiTvMainApp(
                 val cachedTv = repository.getInitialLiveTv()
                 val cachedSports = repository.getInitialSports()
                 val cachedMovies = repository.getInitialMoviesSeries()
-                val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
-                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-                }
-                val cachedAdminPl = repository.getInitialPlaylists() + repository.getAdminPlaylists()
+                val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists())
+                    .distinctBy { it.id }
+                    .filterNot { repository.isMovieOrVodOnlyPlaylist(it) }
+                val cachedAdminPl = (repository.getInitialPlaylists() + repository.getAdminPlaylists()).distinctBy { it.id }
                 val cachedCustom = repository.getCustomStreams()
                 val favs = repository.getFavoriteIds()
                 withContext(Dispatchers.Main) {
@@ -665,8 +798,7 @@ fun NafiTvMainApp(
                 }
             } catch (_: Throwable) {}
         }
-        // 2. Graceful delay before network sync so user can immediately navigate with 60/120fps butter-smooth responsiveness
-        delay(1200)
+        // 2. Start parallel background network sync immediately (zero artificial launch wait)
         refreshAllData()
     }
 

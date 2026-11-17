@@ -54,6 +54,16 @@ class MediaRepository(private val context: Context) {
 
     private val client: OkHttpClient = NafiTvApp.sharedOkHttpClient
 
+    private val fastM3uClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(35, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
+
     private val repositoryScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob()
     )
@@ -1096,24 +1106,209 @@ class MediaRepository(private val context: Context) {
         return (adminMatches + otherMatches).distinctBy { it.id }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
     }
 
-    fun getInitialLiveTv(): List<MediaItem> {
-        val customTv = getCustomStreams().filter { it.type == MediaType.LIVE_TV }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val cached = getCachedLiveTvChannels().filterNot { isItemDeleted(it) || isDemoChannel(it) }
-        val baseList = if (cached.isNotEmpty()) cached else getDefaultBuiltinLiveTv()
+    fun isMovieOrVodOnlyPlaylist(playlist: PlaylistInfo): Boolean {
+        val lowerDesc = playlist.description.orEmpty()
+        return playlist.isMoviePlaylist ||
+            playlist.isMovieOnly ||
+            playlist.type.equals("MOVIE", ignoreCase = true) ||
+            playlist.id.startsWith("pl_ott_") ||
+            playlist.id.startsWith("pl_movie_") ||
+            lowerDesc.contains("OTT Movie", ignoreCase = true) ||
+            lowerDesc.contains("Movie", ignoreCase = true)
+    }
 
+    fun isSportsJsonOnlyPlaylist(playlist: PlaylistInfo): Boolean {
+        val lowerUrl = playlist.url.trim().lowercase()
+        if (lowerUrl.isBlank()) return false
+        return lowerUrl.contains("fancode.json") ||
+            (lowerUrl.endsWith(".json") && (
+                lowerUrl.contains("sport") ||
+                    lowerUrl.contains("match") ||
+                    lowerUrl.contains("event") ||
+                    lowerUrl.contains("tapmad")
+                ))
+    }
+
+    private fun isVodMediaItem(item: MediaItem): Boolean {
+        if (item.episodes.isNotEmpty() || item.seasons.isNotEmpty()) return true
+        val url = item.streamUrl.trim().lowercase()
+        val path = url.substringBefore('?')
+        val hasVodExt = path.endsWith(".mp4") ||
+            path.endsWith(".mkv") ||
+            path.endsWith(".avi") ||
+            path.endsWith(".mov") ||
+            path.endsWith(".webm") ||
+            path.endsWith(".m4v")
+        val hasVodPath = url.contains("/movie/") ||
+            url.contains("/series/") ||
+            url.contains("/vod/") ||
+            url.contains("pixeldrain") ||
+            url.contains("pixeldra.in")
+        if (hasVodExt || hasVodPath) return true
+        return item.type == MediaType.MOVIE && !item.isLive
+    }
+
+    private fun extractLiveChannelsFromPlaylistItems(items: List<MediaItem>): List<MediaItem> {
+        if (items.isEmpty()) return emptyList()
+        val deleted = getDeletedIds()
+        val result = ArrayList<MediaItem>(items.size)
+        for (item in items) {
+            if (deleted.contains(item.id) || isItemDeleted(item) || isDemoChannel(item)) continue
+            if (isVodMediaItem(item)) continue
+            val normalizedItem = if (item.type == MediaType.LIVE_TV || item.type == MediaType.LIVE_EVENT) {
+                item.copy(isLive = true)
+            } else {
+                // Non-VOD items inside Live TV playlists (e.g. Drama/Entertainment TV channels) belong in Live TV
+                item.copy(type = MediaType.LIVE_TV, isLive = true)
+            }
+            result.add(normalizedItem)
+        }
+        return result
+    }
+
+    /**
+     * Merges Live TV channels fast while preserving unique channels and combining servers
+     * when the same channel title appears across multiple playlists.
+     */
+    fun mergeLiveTvChannelsFast(items: List<MediaItem>): List<MediaItem> {
+        if (items.isEmpty()) return emptyList()
+        val deleted = getDeletedIds()
+        val mergedByKey = LinkedHashMap<String, MediaItem>(items.size)
+        val seenIds = HashSet<String>(items.size)
+
+        for (raw in items) {
+            if (deleted.contains(raw.id) || isItemDeleted(raw) || isDemoChannel(raw)) continue
+            val cleanTitle = raw.title.trim()
+            if (cleanTitle.isBlank()) continue
+            val key = cleanTitle.lowercase()
+            val incomingServers = raw.getAllServers()
+            val existing = mergedByKey[key]
+            if (existing == null) {
+                var uid = raw.id.ifBlank { "tv_${mergedByKey.size}_${Math.abs(cleanTitle.hashCode())}" }
+                if (!seenIds.add(uid)) {
+                    uid = "${uid}_${mergedByKey.size}"
+                    seenIds.add(uid)
+                }
+                mergedByKey[key] = raw.copy(id = uid, servers = incomingServers)
+            } else {
+                val combinedServers = ArrayList<StreamServer>(existing.servers.size + incomingServers.size)
+                val seenServerUrls = HashSet<String>()
+                for (srv in existing.servers) {
+                    val u = srv.url.trim().lowercase()
+                    if (u.isNotBlank() && seenServerUrls.add(u)) {
+                        combinedServers.add(srv)
+                    }
+                }
+                for (srv in incomingServers) {
+                    val u = srv.url.trim().lowercase()
+                    if (u.isNotBlank() && seenServerUrls.add(u)) {
+                        val label = if (srv.name.isBlank() || srv.name.startsWith("সার্ভার ১")) {
+                            "সার্ভার ${combinedServers.size + 1}"
+                        } else {
+                            srv.name
+                        }
+                        combinedServers.add(srv.copy(name = label))
+                    }
+                }
+                val betterCategory = if ((existing.category.isBlank() || existing.category.equals("Live TV", ignoreCase = true) || existing.category.equals("Unknown", ignoreCase = true)) &&
+                    raw.category.isNotBlank() && !raw.category.equals("Unknown", ignoreCase = true)
+                ) raw.category else existing.category
+                val betterLogo = existing.logoUrl?.takeIf { it.isNotBlank() } ?: raw.logoUrl
+                mergedByKey[key] = existing.copy(
+                    category = betterCategory,
+                    logoUrl = betterLogo,
+                    servers = combinedServers.ifEmpty { existing.servers }
+                )
+            }
+        }
+        return mergedByKey.values.toList()
+    }
+
+    fun getCachedLiveTvFromAllPlaylists(): List<MediaItem> {
+        val allLivePlaylists = (getAdminPlaylists() + getUserPlaylists() + getInitialPlaylists())
+            .distinctBy { it.id }
+            .filterNot { isMovieOrVodOnlyPlaylist(it) || isSportsJsonOnlyPlaylist(it) }
+        if (allLivePlaylists.isEmpty()) return emptyList()
+        val combined = mutableListOf<MediaItem>()
+        for (pl in allLivePlaylists) {
+            val cached = getCachedPlaylistChannels(pl.id)
+            if (cached.isNotEmpty()) {
+                combined.addAll(extractLiveChannelsFromPlaylistItems(cached))
+            }
+        }
+        return combined
+    }
+
+    suspend fun fetchSinglePlaylistLiveChannelsFast(playlist: PlaylistInfo): List<MediaItem> = withContext(Dispatchers.IO) {
+        if (isMovieOrVodOnlyPlaylist(playlist) || isSportsJsonOnlyPlaylist(playlist)) {
+            return@withContext emptyList()
+        }
+        val cached = getCachedPlaylistChannels(playlist.id)
+
+        // Xtream playlists: fetch ONLY live streams (fast!) instead of pulling 30k VOD movies & series
+        val explicitXtream = !playlist.serverUrl.isNullOrBlank() && !playlist.username.isNullOrBlank() && !playlist.password.isNullOrBlank()
+        val urlCreds = if (!explicitXtream && playlist.url.isNotBlank()) parseXtreamCredentials(playlist.url) else null
+        if (explicitXtream || urlCreds != null) {
+            val srv = if (explicitXtream) playlist.serverUrl!! else urlCreds!!.first
+            val usr = if (explicitXtream) playlist.username!! else urlCreds!!.second
+            val pwd = if (explicitXtream) playlist.password!! else urlCreds!!.third
+            val liveItems = try {
+                fetchXtreamLiveStreamsOnly(srv, usr, pwd)
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (liveItems.isNotEmpty()) {
+                if (cached.isEmpty()) {
+                    saveCachedPlaylistChannels(playlist.id, liveItems)
+                }
+                return@withContext extractLiveChannelsFromPlaylistItems(liveItems)
+            }
+            return@withContext extractLiveChannelsFromPlaylistItems(cached)
+        }
+
+        if (playlist.url.isNotBlank()) {
+            val fetched = try {
+                if (playlist.url.endsWith(".json", ignoreCase = true) || playlist.url.contains(".json?", ignoreCase = true)) {
+                    val req = Request.Builder()
+                        .url(playlist.url.trim())
+                        .header("User-Agent", "NAFITV24/3.1.5 (Android ExoPlayer)")
+                        .build()
+                    fastM3uClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            parseMediaFromJsonString(
+                                resp.body?.string().orEmpty(),
+                                defaultCategory = playlist.title.ifBlank { "Live TV" },
+                                defaultType = MediaType.LIVE_TV
+                            )
+                        } else emptyList()
+                    }
+                } else {
+                    parseM3uFromUrl(playlist.url)
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (fetched.isNotEmpty()) {
+                saveCachedPlaylistChannels(playlist.id, fetched)
+                return@withContext extractLiveChannelsFromPlaylistItems(fetched)
+            }
+        }
+        extractLiveChannelsFromPlaylistItems(cached)
+    }
+
+    fun getInitialLiveTv(): List<MediaItem> {
+        val customTv = getCustomStreams().filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }
+            .filterNot { isItemDeleted(it) || isDemoChannel(it) }
+        val cached = getCachedLiveTvChannels().filterNot { isItemDeleted(it) || isDemoChannel(it) }
+        val playlistCached = getCachedLiveTvFromAllPlaylists()
         val combined = mutableListOf<MediaItem>()
         combined.addAll(customTv)
-        combined.addAll(baseList)
-
-        val seen = HashSet<String>()
-        return combined.mapIndexed { idx, ch ->
-            var uid = ch.id.ifBlank { "tv_${idx}_${Math.abs(ch.title.hashCode())}" }
-            if (seen.contains(uid)) {
-                uid = "${uid}_$idx"
-            }
-            seen.add(uid)
-            ch.copy(id = uid)
-        }.filterNot { isItemDeleted(it) || isDemoChannel(it) }
+        combined.addAll(cached)
+        combined.addAll(playlistCached)
+        if (combined.isEmpty()) {
+            combined.addAll(getDefaultBuiltinLiveTv())
+        }
+        return mergeLiveTvChannelsFast(combined)
     }
 
     fun getInitialMoviesSeries(): List<MediaItem> {
@@ -1678,18 +1873,13 @@ class MediaRepository(private val context: Context) {
                 }
             }
 
-            val fastClient = client.newBuilder()
-                .connectTimeout(20, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .callTimeout(90, TimeUnit.SECONDS)
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .build()
+            val response = fastM3uClient.newCall(reqBuilder.build()).execute()
+            if (!response.isSuccessful) {
+                response.close()
+                return@withContext emptyList()
+            }
 
-            val response = fastClient.newCall(reqBuilder.build()).execute()
-            if (!response.isSuccessful) return@withContext emptyList()
-
-            var content = response.body?.string()?.trim() ?: return@withContext emptyList()
+            var content = response.use { it.body?.string()?.trim() } ?: return@withContext emptyList()
             if (content.startsWith("\uFEFF")) {
                 content = content.removePrefix("\uFEFF").trim()
             }
@@ -1950,9 +2140,14 @@ class MediaRepository(private val context: Context) {
 
                 val isLivePattern = !isExplicitMovieUrl && !isExplicitSeriesUrl && (
                         streamUrl.contains(".m3u8", ignoreCase = true) ||
+                        streamUrl.contains(".ts", ignoreCase = true) ||
+                        streamUrl.contains("output=ts", ignoreCase = true) ||
                         streamUrl.contains(".mpd", ignoreCase = true) ||
                         streamUrl.contains("/hls/", ignoreCase = true) ||
                         streamUrl.contains("/live/", ignoreCase = true) ||
+                        streamUrl.contains("/play/", ignoreCase = true) ||
+                        streamUrl.contains("toffee", ignoreCase = true) ||
+                        streamUrl.contains("bldcmprod", ignoreCase = true) ||
                         streamUrl.contains("edge-cache-token=", ignoreCase = true) ||
                         currentGroup.contains("live", ignoreCase = true) ||
                         currentGroup.contains("tv", ignoreCase = true) ||
@@ -1961,17 +2156,15 @@ class MediaRepository(private val context: Context) {
                 )
 
                 val isMovieOrVod = isExplicitMovieUrl || (!isLivePattern && (
-                        currentGroup.contains("movie", ignoreCase = true) ||
-                        currentGroup.contains("cinema", ignoreCase = true) ||
                         currentGroup.contains("vod", ignoreCase = true) ||
-                        currentGroup.contains("film", ignoreCase = true)
+                        currentGroup.contains("web film", ignoreCase = true)
                 ))
 
                 val isSeries = isExplicitSeriesUrl || (!isLivePattern && !isMovieOrVod && (
                         currentGroup.contains("series", ignoreCase = true) ||
                         currentGroup.contains("web series", ignoreCase = true) ||
-                        currentGroup.contains("drama", ignoreCase = true) ||
-                        currentGroup.contains("serial", ignoreCase = true)
+                        currentGroup.contains("season", ignoreCase = true) ||
+                        currentGroup.contains("episodes", ignoreCase = true)
                 ))
 
                 val mediaType = when {
@@ -2016,7 +2209,7 @@ class MediaRepository(private val context: Context) {
                     else -> currentGroup
                 }
 
-                val resolvedServers = if (isSportsItem || isAkamaiOrTapmad) {
+                val resolvedServers = if (isExplicitMatch || isAkamaiOrTapmad) {
                     resolveWorkingSportsServers(cleanTitle, streamUrl, currentTvgId ?: currentId.toString())
                 } else emptyList()
 
@@ -4916,27 +5109,42 @@ class MediaRepository(private val context: Context) {
         val items = mutableListOf<MediaItem>()
 
         try {
-            val liveCatMap = mutableMapOf<String, String>()
-            try {
-                val catUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_categories"
-                val catReq = Request.Builder().url(catUrl).header("User-Agent", "IPTVSmartersPro").build()
-                val catResp = client.newCall(catReq).execute()
-                if (catResp.isSuccessful) {
-                    val arr = JSONArray(catResp.body?.string() ?: "")
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.optJSONObject(i) ?: continue
-                        val id = obj.optString("category_id")
-                        val name = obj.optString("category_name")
-                        if (id.isNotBlank() && name.isNotBlank()) liveCatMap[id] = name
+            val (liveCatMap, liveJsonStr) = coroutineScope {
+                val catJob = async {
+                    val map = mutableMapOf<String, String>()
+                    try {
+                        val catUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_categories"
+                        val catReq = Request.Builder().url(catUrl).header("User-Agent", "IPTVSmartersPro").build()
+                        fastM3uClient.newCall(catReq).execute().use { catResp ->
+                            if (catResp.isSuccessful) {
+                                val arr = JSONArray(catResp.body?.string() ?: "")
+                                for (i in 0 until arr.length()) {
+                                    val obj = arr.optJSONObject(i) ?: continue
+                                    val id = obj.optString("category_id")
+                                    val name = obj.optString("category_name")
+                                    if (id.isNotBlank() && name.isNotBlank()) map[id] = name
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    map
+                }
+                val liveJob = async {
+                    try {
+                        val liveUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams"
+                        val liveReq = Request.Builder().url(liveUrl).header("User-Agent", "IPTVSmartersPro").build()
+                        fastM3uClient.newCall(liveReq).execute().use { liveResp ->
+                            if (liveResp.isSuccessful) liveResp.body?.string() else null
+                        }
+                    } catch (_: Exception) {
+                        null
                     }
                 }
-            } catch (_: Exception) {}
+                catJob.await() to liveJob.await()
+            }
 
-            val liveUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams"
-            val liveReq = Request.Builder().url(liveUrl).header("User-Agent", "IPTVSmartersPro").build()
-            val liveResp = client.newCall(liveReq).execute()
-            if (liveResp.isSuccessful) {
-                val liveArr = JSONArray(liveResp.body?.string() ?: "")
+            if (!liveJsonStr.isNullOrBlank() && liveJsonStr.trimStart().startsWith("[")) {
+                val liveArr = JSONArray(liveJsonStr)
                 val isRgkkw = cleanServer.contains("rgkkw.live", ignoreCase = true)
                 for (i in 0 until liveArr.length()) {
                     val sObj = liveArr.optJSONObject(i) ?: continue
