@@ -113,7 +113,6 @@ object StorageCleaner {
                         name.startsWith("cache_movies_pl_") ||
                         name.startsWith("cache_xtream_acc_") ||
                         name.equals("cache_livetv_v2.json") ||
-                        name.equals("cache_livetv_v3.json") ||
                         name.equals("cache_sports_v2.json") ||
                         name.equals("cache_sports_v3.json") ||
                         name.equals("cache_movies_v2.json")
@@ -173,7 +172,6 @@ object StorageCleaner {
             // Remove legacy cache files that are no longer used
             val legacy = listOf(
                 "cache_livetv_v2.json",
-                "cache_livetv_v3.json",
                 "cache_sports_v2.json",
                 "cache_sports_v3.json",
                 "cache_movies_v2.json"

@@ -2451,8 +2451,6 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         if (liveTvM3uInput.isNotBlank()) {
                                             val url = liveTvM3uInput.trim()
-                                            repository.saveLiveTvM3uUrl(url)
-                                            onDataChanged()
                                             coroutineScope.launch {
                                                 val ok = repository.pushAppConfigToFirebase(liveTvM3u = url)
                                                 withContext(Dispatchers.Main) {

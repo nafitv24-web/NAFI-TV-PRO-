@@ -269,7 +269,7 @@ fun LiveTvTabScreen(
             items(categories) { cat ->
                 val isSelected = selectedCategory == cat
                 val label = when (cat) {
-                    "ALL" -> if (isLoading && preparedChannels.isEmpty()) "সকল চ্যানেল (লোড হচ্ছে...)" else "সকল চ্যানেল (${preparedChannels.size})"
+                    "ALL" -> if (isLoading && channels.isEmpty()) "সকল চ্যানেল (লোড হচ্ছে...)" else "সকল চ্যানেল (${channels.size})"
                     "FAVORITE" -> "⭐ প্রিয় (${favoriteIds.size})"
                     else -> cat
                 }
