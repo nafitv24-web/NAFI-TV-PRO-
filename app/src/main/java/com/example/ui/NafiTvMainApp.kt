@@ -67,6 +67,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
@@ -118,6 +119,7 @@ enum class LoadingStage(val title: String, val shortLabel: String, val step: Int
 
 enum class AdminTab(val label: String) {
     ANALYTICS("👥 ইউজার ও ট্রাফিক"),
+    SUBSCRIPTIONS("💳 সাবস্ক্রিপশন"),
     TICKER("ব্রেকিং নিউজ বার"),
     CHANNELS("Live TV Channels"),
     MOVIES("Movies"),
@@ -242,13 +244,71 @@ fun NafiTvMainApp(
     var notificationsList by remember { mutableStateOf<List<AppNotification>>(emptyList()) }
     var showNotificationCenterDialog by remember { mutableStateOf(false) }
 
+    // Firebase Realtime Database Subscription & Voucher Gate State (/users/{user_phone}/)
+    val initialCachedSub = remember { repository.getCachedSubscriptionRecord() }
+    val initialSubEval = remember {
+        when {
+            !repository.isSubscriptionGateEnabledLocal() -> com.example.util.SubscriptionCheckResult.Disabled
+            initialCachedSub != null -> com.example.util.SubscriptionManager.evaluateRecord(initialCachedSub)
+            else -> com.example.util.SubscriptionCheckResult.Checking
+        }
+    }
+    var subscriptionResult by remember { mutableStateOf(initialSubEval) }
+    var isCheckingSubscription by remember { mutableStateOf(false) }
+    var showSubscriptionExpiredDialog by remember {
+        mutableStateOf(initialSubEval is com.example.util.SubscriptionCheckResult.ExpiredOrInactive)
+    }
+    var showSubscriptionVoucherScreen by remember { mutableStateOf(false) }
+    var subscriptionSupportContact by remember { mutableStateOf(repository.getSubscriptionSupportContactLocal()) }
+    var adminInitialTab by remember { mutableStateOf(AdminTab.CHANNELS) }
+    var showGateAdminLoginDialog by remember { mutableStateOf(false) }
+    var gateAdminPinInput by remember { mutableStateOf("") }
+    var gateAdminLoginError by remember { mutableStateOf<String?>(null) }
+
     // Notification Permission Launcher (Android 13+)
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { _ -> }
     )
 
+    fun triggerSubscriptionCheck() {
+        coroutineScope.launch {
+            isCheckingSubscription = true
+            val res = repository.checkUserSubscriptionOnStartup()
+            subscriptionSupportContact = repository.getSubscriptionSupportContactLocal()
+            subscriptionResult = res
+            isCheckingSubscription = false
+            when (res) {
+                is com.example.util.SubscriptionCheckResult.Active,
+                is com.example.util.SubscriptionCheckResult.Disabled -> {
+                    showSubscriptionExpiredDialog = false
+                    showSubscriptionVoucherScreen = false
+                }
+                is com.example.util.SubscriptionCheckResult.NetworkError -> {
+                    if (res.cachedActive != null) {
+                        showSubscriptionExpiredDialog = false
+                        showSubscriptionVoucherScreen = false
+                    } else {
+                        selectedMediaItem = null
+                        showSubscriptionVoucherScreen = true
+                    }
+                }
+                is com.example.util.SubscriptionCheckResult.ExpiredOrInactive -> {
+                    selectedMediaItem = null
+                    showSubscriptionExpiredDialog = true
+                }
+                is com.example.util.SubscriptionCheckResult.NeedsPhoneOrVoucher -> {
+                    selectedMediaItem = null
+                    showSubscriptionExpiredDialog = false
+                    showSubscriptionVoucherScreen = true
+                }
+                is com.example.util.SubscriptionCheckResult.Checking -> Unit
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
+        triggerSubscriptionCheck()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             try {
                 if (androidx.core.content.ContextCompat.checkSelfPermission(
@@ -276,12 +336,18 @@ fun NafiTvMainApp(
     var customList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var m3uList by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     val allLiveChannels = remember(liveTvList, customList, m3uList) {
-        liveTvList + customList.filter { it.type == MediaType.LIVE_TV } + m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
+        repository.mergeLiveTvChannelsFast(
+            liveTvList +
+                customList.filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) } +
+                m3uList.filter { it.type == MediaType.LIVE_TV || it.isLive }
+        )
     }
     var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var breakingNewsText by remember { mutableStateOf("") }
     var isRefreshing by remember { mutableStateOf(true) }
     var currentLoadingStage by remember { mutableStateOf(LoadingStage.IDLE) }
+    var lastSyncedLiveTvUrl by remember { mutableStateOf(repository.getSavedLiveTvM3uUrl()) }
+    var activeRefreshJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     fun checkForUpdates(isManualCheck: Boolean = false) {
         coroutineScope.launch {
@@ -307,7 +373,8 @@ fun NafiTvMainApp(
 
     // Auto-fetch data: Sequential Staged Loading (1. Live TV -> 2. Live Events -> 3. Movies -> 4. Playlists & Cloud)
     fun refreshAllData() {
-        coroutineScope.launch(Dispatchers.IO) {
+        activeRefreshJob?.cancel()
+        activeRefreshJob = coroutineScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) {
                 isRefreshing = true
                 currentLoadingStage = LoadingStage.LIVE_TV
@@ -315,82 +382,175 @@ fun NafiTvMainApp(
             try {
                 val deleted = repository.getDeletedIds()
 
-                // Step 0: Sync Remote App Config immediately
-                try {
-                    repository.fetchAppConfigFromFirebase()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-
                 // -------------------------------------------------------------
-                // সমান্তরাল দ্রুত লোডিং (Ultra-Fast Concurrent Staged Loading)
-                // সকল ট্যাব (লাইভ টিভি, লাইভ ইভেন্ট, মুভি ও প্লেলিস্ট) একসাথে লোড হবে যেন কোনো বিলম্ব না হয়
+                // আল্ট্রা-ফাস্ট সমান্তরাল লোডিং (Zero-Delay Progressive Concurrent Loading)
+                // রিমোট কনফিগ, ফায়ারবেস প্লেলিস্ট, Xtream ও M3U একসাথে লোড হয়ে সাথে সাথে Live TV তে যুক্ত হবে
                 // -------------------------------------------------------------
+                val initialLiveTvUrl = repository.getSavedLiveTvM3uUrl()
                 kotlinx.coroutines.coroutineScope {
-                    // ১. লাইভ টিভি চ্যানেল সমান্তরাল লোডিং (Live TV)
+                    val appConfigJob = async {
+                        try {
+                            repository.fetchAppConfigFromFirebase()
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+
+                    val fbPlaylistsJob = async {
+                        try {
+                            repository.fetchPlaylistsFromFirebase()
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }
+
+                    val fbItemsJob = async {
+                        try {
+                            repository.fetchFromFirebase().filterNot { deleted.contains(it.id) }
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    }
+
+                    // ১. লাইভ টিভি: শুধুমাত্র এডমিন প্যানেলের লাইভ টিভি প্লেলিস্ট লিংক (Live TV M3U) + Xtream Live + Firebase Live চ্যানেল
+                    // প্রতিটি এডমিন প্লেলিস্ট আলাদাভাবে সমান্তরালে লোড হয়ে সাথে সাথে স্ক্রিনে আসবে (কোনো একটি স্লো হলে অন্যগুলো আটকাবে না)
                     launch {
                         try {
                             withContext(Dispatchers.Main) { currentLoadingStage = LoadingStage.LIVE_TV }
-                            val liveTvM3uUrl = repository.getSavedLiveTvM3uUrl()
-                            val tvM3uJob = async {
-                                if (liveTvM3uUrl.isNotBlank()) {
-                                    kotlinx.coroutines.withTimeoutOrNull(25000) {
-                                        try {
-                                            repository.parseM3uFromUrl(liveTvM3uUrl).map {
-                                                it.copy(type = MediaType.LIVE_TV, isLive = true)
-                                            }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                        } catch (_: Exception) { emptyList() }
-                                    } ?: emptyList()
-                                } else emptyList()
+
+                            val liveBatchesLock = Any()
+                            val liveBatches = LinkedHashMap<String, List<MediaItem>>()
+                            val builtinTv = repository.getDefaultBuiltinLiveTv()
+                            val customTv = repository.getCustomStreams()
+                                .filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }
+                                .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+
+                            synchronized(liveBatchesLock) {
+                                if (customTv.isNotEmpty()) liveBatches["custom"] = customTv
+                            }
+
+                            val initialTvBaseline = withContext(Dispatchers.Main) {
+                                liveTvList.filterNot { repository.isDemoChannel(it) }
+                            }
+                            val emitMutex = kotlinx.coroutines.sync.Mutex()
+                            var lastEmitMs = 0L
+                            suspend fun emitLiveTvProgress(force: Boolean = false) {
+                                emitMutex.lock()
+                                try {
+                                    val now = System.currentTimeMillis()
+                                    if (!force && (now - lastEmitMs) < 90L) return
+                                    val snapshot = synchronized(liveBatchesLock) {
+                                        val combined = ArrayList<MediaItem>()
+                                        liveBatches.values.forEach { combined.addAll(it) }
+                                        combined
+                                    }
+                                    if (snapshot.isEmpty() && !force) return
+                                    lastEmitMs = now
+                                    val merged = if (force) {
+                                        if (snapshot.isNotEmpty()) {
+                                            repository.mergeLiveTvChannelsFast(snapshot + builtinTv)
+                                        } else {
+                                            repository.mergeLiveTvChannelsFast(initialTvBaseline.ifEmpty { builtinTv })
+                                        }
+                                    } else {
+                                        repository.mergeLiveTvChannelsFast(snapshot + initialTvBaseline)
+                                    }
+                                    if (merged.isNotEmpty()) {
+                                        withContext(Dispatchers.Main) {
+                                            liveTvList = merged
+                                        }
+                                    }
+                                } finally {
+                                    emitMutex.unlock()
+                                }
+                            }
+
+                            val launchedLiveTvUrls = java.util.Collections.synchronizedSet(HashSet<String>())
+                            suspend fun fetchAndEmitAdminLiveUrl(singleUrl: String) {
+                                if (!launchedLiveTvUrls.add(singleUrl)) return
+                                val items = kotlinx.coroutines.withTimeoutOrNull(40000L) {
+                                    try {
+                                        repository.fetchSingleLiveTvSourceUrlFast(singleUrl)
+                                            .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                    } catch (_: Exception) {
+                                        emptyList()
+                                    }
+                                } ?: emptyList()
+                                if (items.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) {
+                                        liveBatches["admin_m3u_$singleUrl"] = items
+                                    }
+                                    emitLiveTvProgress()
+                                }
+                            }
+
+                            val initialAdminUrls = repository.extractUrls(initialLiveTvUrl)
+                            val initialUrlJobs = initialAdminUrls.map { singleUrl ->
+                                async { fetchAndEmitAdminLiveUrl(singleUrl) }
                             }
 
                             val xtreamLiveJob = async {
-                                kotlinx.coroutines.withTimeoutOrNull(20000) {
+                                val items = kotlinx.coroutines.withTimeoutOrNull(25000L) {
                                     try {
-                                        repository.fetchAllXtreamLiveChannels().filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                    } catch (_: Exception) { emptyList() }
+                                        repository.fetchAllXtreamLiveChannels()
+                                            .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                    } catch (_: Exception) {
+                                        emptyList()
+                                    }
                                 } ?: emptyList()
-                            }
-
-                            val fbTvJob = async {
-                                try {
-                                    repository.fetchFromFirebase().filter { it.type == MediaType.LIVE_TV }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                                } catch (_: Exception) { emptyList() }
-                            }
-
-                            val customTv = repository.getCustomStreams().filter { it.type == MediaType.LIVE_TV || (it.isLive && it.type != MediaType.LIVE_EVENT) }.filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
-                            val tvM3u = tvM3uJob.await()
-                            val xtreamLiveChannels = xtreamLiveJob.await()
-                            val fbTv = fbTvJob.await()
-
-                            val combinedTv = mutableListOf<MediaItem>()
-                            combinedTv.addAll(customTv)
-                            combinedTv.addAll(fbTv)
-                            combinedTv.addAll(tvM3u.filterNot { repository.isDemoChannel(it) })
-                            combinedTv.addAll(xtreamLiveChannels.filterNot { repository.isDemoChannel(it) })
-
-                            val builtinTv = repository.getDefaultBuiltinLiveTv()
-                            val sourceTvList = if (combinedTv.isNotEmpty()) {
-                                (combinedTv + builtinTv).distinctBy { it.title.trim().lowercase() }
-                            } else {
-                                val currentLoaded = liveTvList.filterNot { repository.isDemoChannel(it) }
-                                if (currentLoaded.isNotEmpty()) currentLoaded else builtinTv
-                            }
-                            val seenTvIds = HashSet<String>()
-                            val updatedTv = sourceTvList.filterNot { repository.isDemoChannel(it) }.mapIndexed { idx, ch ->
-                                var uid = ch.id.ifBlank { "tv_${idx}_${Math.abs(ch.title.hashCode())}" }
-                                if (seenTvIds.contains(uid)) {
-                                    uid = "${uid}_$idx"
+                                if (items.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) { liveBatches["xtream_live"] = items }
+                                    emitLiveTvProgress()
                                 }
-                                seenTvIds.add(uid)
-                                ch.copy(id = uid)
                             }
 
-                            if (updatedTv.isNotEmpty()) {
+                            val fbTvApplyJob = async {
+                                val fbTv = fbItemsJob.await()
+                                    .filter { it.type == MediaType.LIVE_TV }
+                                    .filterNot { deleted.contains(it.id) || repository.isDemoChannel(it) }
+                                if (fbTv.isNotEmpty()) {
+                                    synchronized(liveBatchesLock) { liveBatches["fb_tv"] = fbTv }
+                                    emitLiveTvProgress()
+                                }
+                            }
+
+                            // Firebase app_config থেকে আপডেটেড Admin Live TV প্লেলিস্ট এলে কেবল নতুন URL গুলো ফেচ করুন ও মুছে ফেলা URL বাদ দিন
+                            val updatedAppConfigLiveJob = async {
+                                val remoteConfig = appConfigJob.await()
+                                val updatedCombinedUrl = repository.getSavedLiveTvM3uUrl()
                                 withContext(Dispatchers.Main) {
-                                    liveTvList = updatedTv
+                                    lastSyncedLiveTvUrl = updatedCombinedUrl
                                 }
-                                repository.saveCachedLiveTvChannels(updatedTv)
+                                val latestAdminUrls = repository.extractUrls(updatedCombinedUrl)
+                                if (remoteConfig != null) {
+                                    val activeKeys = latestAdminUrls.map { "admin_m3u_$it" }.toSet()
+                                    synchronized(liveBatchesLock) {
+                                        val iter = liveBatches.keys.iterator()
+                                        while (iter.hasNext()) {
+                                            val k = iter.next()
+                                            if (k.startsWith("admin_m3u_") && !activeKeys.contains(k)) {
+                                                iter.remove()
+                                            }
+                                        }
+                                    }
+                                }
+                                val newlyDiscovered = latestAdminUrls.filterNot { launchedLiveTvUrls.contains(it) }
+                                if (newlyDiscovered.isNotEmpty()) {
+                                    newlyDiscovered.map { newUrl ->
+                                        async { fetchAndEmitAdminLiveUrl(newUrl) }
+                                    }.awaitAll()
+                                }
+                            }
+
+                            initialUrlJobs.awaitAll()
+                            xtreamLiveJob.await()
+                            fbTvApplyJob.await()
+                            updatedAppConfigLiveJob.await()
+
+                            emitLiveTvProgress(force = true)
+                            val finalToCache = withContext(Dispatchers.Main) { liveTvList }
+                            if (finalToCache.isNotEmpty()) {
+                                repository.saveCachedLiveTvChannels(finalToCache)
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -510,38 +670,30 @@ fun NafiTvMainApp(
                             val initialPlaylists = repository.getInitialPlaylists().filterNot { deleted.contains(it.id) }
                             val adminPlaylists = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
                             val userPlaylists = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
-                            val fbPlaylists = try { repository.fetchPlaylistsFromFirebase() } catch (_: Exception) { emptyList() }
+                            val fbPlaylists = fbPlaylistsJob.await()
                             val allPlaylists = (fbPlaylists + adminPlaylists + userPlaylists + initialPlaylists)
                                 .distinctBy { it.id }
                                 .filterNot { deleted.contains(it.id) }
 
                             withContext(Dispatchers.Main) {
                                 adminPlaylistsList = allPlaylists
-                                playlistsList = allPlaylists.filterNot {
-                                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
-                                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
-                                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-                                }
+                                playlistsList = allPlaylists.filterNot { repository.isMovieOrVodOnlyPlaylist(it) }
                             }
 
-                            // Firebase extra items
+                            // Apply shared Firebase extra items for Events and Movies (Live TV already applied inside Task 1)
                             try {
-                                val fbItems = try { repository.fetchFromFirebase().filterNot { deleted.contains(it.id) } } catch (_: Exception) { emptyList() }
+                                val fbItems = fbItemsJob.await()
                                 val fbSports = fbItems.filter { it.type == MediaType.LIVE_EVENT }
-                                val fbTv = fbItems.filter { it.type == MediaType.LIVE_TV }
                                 val fbMov = fbItems.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES }
 
                                 val newSports = if (fbSports.isNotEmpty()) (fbSports + sportsList).distinctBy { it.id }.filterNot { repository.isItemDeleted(it) } else null
-                                val newTv = if (fbTv.isNotEmpty()) (liveTvList + fbTv).distinctBy { it.id }.filterNot { deleted.contains(it.id) } else null
                                 val newMov = if (fbMov.isNotEmpty()) (moviesList + fbMov).distinctBy { it.id }.filterNot { deleted.contains(it.id) }.sortedByDescending { it.movieSortWeight } else null
 
                                 withContext(Dispatchers.Main) {
                                     if (newSports != null) sportsList = newSports
-                                    if (newTv != null) liveTvList = newTv
                                     if (newMov != null) moviesList = newMov
                                 }
                                 if (newSports != null) repository.saveCachedSportsMatches(newSports)
-                                if (newTv != null) repository.saveCachedLiveTvChannels(newTv)
                                 if (newMov != null) repository.saveCachedMoviesList(newMov)
                             } catch (_: Exception) {}
 
@@ -643,10 +795,10 @@ fun NafiTvMainApp(
                 val cachedTv = repository.getInitialLiveTv()
                 val cachedSports = repository.getInitialSports()
                 val cachedMovies = repository.getInitialMoviesSeries()
-                val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists()).filterNot {
-                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) || it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") || (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-                }
-                val cachedAdminPl = repository.getInitialPlaylists() + repository.getAdminPlaylists()
+                val cachedPl = (repository.getInitialPlaylists() + repository.getCustomPlaylists())
+                    .distinctBy { it.id }
+                    .filterNot { repository.isMovieOrVodOnlyPlaylist(it) }
+                val cachedAdminPl = (repository.getInitialPlaylists() + repository.getAdminPlaylists()).distinctBy { it.id }
                 val cachedCustom = repository.getCustomStreams()
                 val favs = repository.getFavoriteIds()
                 withContext(Dispatchers.Main) {
@@ -665,8 +817,7 @@ fun NafiTvMainApp(
                 }
             } catch (_: Throwable) {}
         }
-        // 2. Graceful delay before network sync so user can immediately navigate with 60/120fps butter-smooth responsiveness
-        delay(1200)
+        // 2. Start parallel background network sync immediately (zero artificial launch wait)
         refreshAllData()
     }
 
@@ -689,7 +840,59 @@ fun NafiTvMainApp(
         Toast.makeText(context, if (item.type == MediaType.MOVIE) "মুভি তালিকায় যুক্ত হয়েছে!" else "চ্যানেল লাইভ তালিকায় যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show()
     }
 
-    if (activeUserMode == null) {
+    if (isAdminViewActive) {
+        // FULLSCREEN ADMIN CONTROL APP (Always accessible once authenticated)
+        AdminControlAppScreen(
+            repository = repository,
+            sportsList = sportsList,
+            liveTvList = liveTvList + customList.filter { it.type == MediaType.LIVE_TV },
+            moviesList = moviesList + customList.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES },
+            playlistsList = adminPlaylistsList,
+            cloudStreamRepos = cloudStreamRepos,
+            movieProviders = allMovieProviders,
+            onOpenMovieProvider = { activeMovieBrowserProvider = it },
+            initialAdminTab = adminInitialTab,
+            onExitAdmin = {
+                isAdminViewActive = false
+                triggerSubscriptionCheck()
+            },
+            onDataChanged = {
+                val deleted = repository.getDeletedIds()
+                cloudStreamRepos = repository.getSavedCloudStreamRepos()
+                allMovieProviders = repository.getAllMovieProviders()
+                breakingNewsText = repository.getMarqueeTickerText()
+                val initial = repository.getInitialPlaylists().filterNot { deleted.contains(it.id) }
+                val adminPl = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
+                val userPl = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
+                adminPlaylistsList = (adminPl + userPl + initial).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
+                playlistsList = adminPlaylistsList.filterNot {
+                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
+                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
+                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
+                }
+                sportsList = repository.getInitialSports().filterNot { repository.isItemDeleted(it) }
+                customList = repository.getCustomStreams().filterNot { deleted.contains(it.id) }
+                refreshAllData()
+            }
+        )
+    } else if (showSubscriptionVoucherScreen) {
+        val statusReason = (subscriptionResult as? com.example.util.SubscriptionCheckResult.ExpiredOrInactive)?.reason
+            ?: (subscriptionResult as? com.example.util.SubscriptionCheckResult.NetworkError)?.message
+        SubscriptionVoucherGateScreen(
+            repository = repository,
+            initialPhone = repository.getSavedSubscriberPhone(),
+            statusMessage = statusReason,
+            isChecking = isCheckingSubscription,
+            supportContact = subscriptionSupportContact,
+            onActivated = { activeRes ->
+                subscriptionResult = activeRes
+                showSubscriptionExpiredDialog = false
+                showSubscriptionVoucherScreen = false
+            },
+            onRetryStartupCheck = { triggerSubscriptionCheck() },
+            onOpenAdminLogin = { showGateAdminLoginDialog = true }
+        )
+    } else if (activeUserMode == null) {
         ModeSelectionScreen(
             repository = repository,
             onSelectAutoMode = {
@@ -776,41 +979,6 @@ fun NafiTvMainApp(
             onExploreMovies = {
                 isOfflineDownloadsActive = false
                 currentTab = AppTab.MOVIES
-            }
-        )
-    } else if (isAdminViewActive) {
-        // FULLSCREEN ADMIN CONTROL APP (Exact UI from Screenshot 1 & 3)
-        AdminControlAppScreen(
-            repository = repository,
-            sportsList = sportsList,
-            liveTvList = liveTvList + customList.filter { it.type == MediaType.LIVE_TV },
-            moviesList = moviesList + customList.filter { it.type == MediaType.MOVIE || it.type == MediaType.SERIES },
-            playlistsList = adminPlaylistsList,
-            cloudStreamRepos = cloudStreamRepos,
-            movieProviders = allMovieProviders,
-            onOpenMovieProvider = { activeMovieBrowserProvider = it },
-            onExitAdmin = { isAdminViewActive = false },
-            onDataChanged = {
-                val deleted = repository.getDeletedIds()
-                cloudStreamRepos = repository.getSavedCloudStreamRepos()
-                allMovieProviders = repository.getAllMovieProviders()
-                breakingNewsText = repository.getMarqueeTickerText()
-                val initial = repository.getInitialPlaylists().filterNot { deleted.contains(it.id) }
-                val adminPl = repository.getAdminPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = true, isReadOnly = true) }
-                val userPl = repository.getUserPlaylists().filterNot { deleted.contains(it.id) }.map { it.copy(isAdmin = false, isReadOnly = false) }
-                adminPlaylistsList = (adminPl + userPl + initial).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
-                playlistsList = adminPlaylistsList.filterNot {
-                    it.isMoviePlaylist || it.isMovieOnly || it.type.equals("MOVIE", ignoreCase = true) ||
-                    it.id.startsWith("pl_ott_") || it.id.startsWith("pl_movie_") ||
-                    (it.description != null && (it.description.contains("OTT Movie", ignoreCase = true) || it.description.contains("Movie", ignoreCase = true)))
-                }
-                sportsList = repository.getInitialSports().filterNot { repository.isItemDeleted(it) }
-                customList = repository.getCustomStreams().filterNot { deleted.contains(it.id) }
-                liveTvList = repository.getInitialLiveTv().filterNot { deleted.contains(it.id) }
-                val cachedMov = repository.getCachedMoviesList().filterNot { deleted.contains(it.id) }
-                val hubMovies = repository.getAllCachedPlaylistAndXtreamMovies().filterNot { deleted.contains(it.id) }
-                moviesList = (hubMovies + cachedMov + repository.getInitialMoviesSeries()).distinctBy { it.id }.filterNot { deleted.contains(it.id) }
-                favoriteIds = repository.getFavoriteIds()
             }
         )
     } else {
@@ -1288,11 +1456,22 @@ fun NafiTvMainApp(
                                     repository.saveUserMode(null)
                                     activeUserMode = null
                                 },
-                                onOpenAdminApp = { isAdminViewActive = true },
+                                onOpenAdminApp = {
+                                    adminInitialTab = AdminTab.CHANNELS
+                                    isAdminViewActive = true
+                                },
                                 onOpenOfflineDownloads = { isOfflineDownloadsActive = true },
                                 onOpenExtensionManager = { isExtensionsManagementActive = true },
                                 onCheckForUpdates = { checkForUpdates(isManualCheck = true) },
                                 availableUpdateInfo = availableUpdateInfo,
+                                subscriptionResult = subscriptionResult,
+                                onOpenSubscriptionGate = { showSubscriptionVoucherScreen = true },
+                                onRefreshSubscription = { triggerSubscriptionCheck() },
+                                onLogoutSubscriber = {
+                                    repository.clearSubscriberSession()
+                                    showSubscriptionVoucherScreen = true
+                                    subscriptionResult = com.example.util.SubscriptionCheckResult.NeedsPhoneOrVoucher
+                                },
                                 onPlayDirectStream = { url, title ->
                                     val normalizedUrl = com.example.util.StreamPlaybackSupport.normalizeStreamUrl(url)
                                     val lowerUrl = normalizedUrl.lowercase()
@@ -1730,11 +1909,22 @@ fun NafiTvMainApp(
                                 repository.saveUserMode(null)
                                 activeUserMode = null
                             },
-                            onOpenAdminApp = { isAdminViewActive = true },
+                            onOpenAdminApp = {
+                                adminInitialTab = AdminTab.CHANNELS
+                                isAdminViewActive = true
+                            },
                             onOpenOfflineDownloads = { isOfflineDownloadsActive = true },
                             onOpenExtensionManager = { isExtensionsManagementActive = true },
                             onCheckForUpdates = { checkForUpdates(isManualCheck = true) },
                             availableUpdateInfo = availableUpdateInfo,
+                            subscriptionResult = subscriptionResult,
+                            onOpenSubscriptionGate = { showSubscriptionVoucherScreen = true },
+                            onRefreshSubscription = { triggerSubscriptionCheck() },
+                            onLogoutSubscriber = {
+                                repository.clearSubscriberSession()
+                                showSubscriptionVoucherScreen = true
+                                subscriptionResult = com.example.util.SubscriptionCheckResult.NeedsPhoneOrVoucher
+                            },
                             onPlayDirectStream = { url, title ->
                                 val normalizedUrl = com.example.util.StreamPlaybackSupport.normalizeStreamUrl(url)
                                 val lowerUrl = normalizedUrl.lowercase()
@@ -1783,6 +1973,89 @@ fun NafiTvMainApp(
             }
             }
         }
+    }
+
+    // Subscription Expired / Inactive AlertDialog (blocks access until renewed with voucher)
+    if (showSubscriptionExpiredDialog && !isAdminViewActive && !showSubscriptionVoucherScreen) {
+        val expiredRes = subscriptionResult as? com.example.util.SubscriptionCheckResult.ExpiredOrInactive
+        SubscriptionExpiredAlertDialog(
+            phone = expiredRes?.record?.phone ?: repository.getSavedSubscriberPhone(),
+            reason = expiredRes?.reason ?: "আপনার সাবস্ক্রিপশনের মেয়াদ শেষ বা নিষ্ক্রিয় রয়েছে।",
+            packageType = expiredRes?.record?.packageType,
+            expiryDate = expiredRes?.record?.expiryDate,
+            onGoToVoucherEntry = {
+                showSubscriptionExpiredDialog = false
+                showSubscriptionVoucherScreen = true
+            },
+            onRetryCheck = {
+                triggerSubscriptionCheck()
+            }
+        )
+    }
+
+    // Admin PIN Login Dialog triggered from Subscription Gate footer
+    if (showGateAdminLoginDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showGateAdminLoginDialog = false
+                gateAdminPinInput = ""
+                gateAdminLoginError = null
+            },
+            containerColor = Color(0xFF1E293B),
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Rounded.Lock, contentDescription = null, tint = Color(0xFF00E5FF))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("এডমিন পাসওয়ার্ড দিন", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "সাবস্ক্রিপশন ও ইউজার ম্যানেজমেন্টে প্রবেশ করতে পিন দিন:",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 13.sp
+                    )
+                    OutlinedTextField(
+                        value = gateAdminPinInput,
+                        onValueChange = { gateAdminPinInput = it },
+                        placeholder = { Text("••••••••", color = Color(0xFF64748B)) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = customFieldColors(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    if (!gateAdminLoginError.isNullOrBlank()) {
+                        Text(text = gateAdminLoginError.orEmpty(), color = Color(0xFFEF4444), fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (repository.verifyAdminPin(gateAdminPinInput)) {
+                            showGateAdminLoginDialog = false
+                            gateAdminPinInput = ""
+                            gateAdminLoginError = null
+                            adminInitialTab = AdminTab.SUBSCRIPTIONS
+                            isAdminViewActive = true
+                        } else {
+                            gateAdminLoginError = "ভুল পাসওয়ার্ড! পুনরায় চেষ্টা করুন।"
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black)
+                ) {
+                    Text("লগইন", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGateAdminLoginDialog = false }) {
+                    Text("বাতিল", color = Color.White)
+                }
+            }
+        )
     }
 
     // In-App Update Dialog (Beautiful Animated M3 Popup for Auto-Updating App)
@@ -2158,7 +2431,11 @@ fun MenuScreen(
     onCustomAdded: (MediaItem) -> Unit,
     onResetDefaults: () -> Unit,
     onCheckForUpdates: () -> Unit = {},
-    availableUpdateInfo: AppUpdateInfo? = null
+    availableUpdateInfo: AppUpdateInfo? = null,
+    subscriptionResult: com.example.util.SubscriptionCheckResult = com.example.util.SubscriptionCheckResult.Disabled,
+    onOpenSubscriptionGate: () -> Unit = {},
+    onRefreshSubscription: () -> Unit = {},
+    onLogoutSubscriber: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -2217,6 +2494,23 @@ fun MenuScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // CARD -2: My Subscription & Voucher Status
+        item {
+            MySubscriptionMenuCard(
+                result = subscriptionResult,
+                savedPhone = repository.getSavedSubscriberPhone(),
+                onRenewOrVerifyClick = onOpenSubscriptionGate,
+                onRefreshStatusClick = {
+                    Toast.makeText(context, "সাবস্ক্রিপশন স্ট্যাটাস যাচাই হচ্ছে...", Toast.LENGTH_SHORT).show()
+                    onRefreshSubscription()
+                },
+                onSwitchPhoneClick = {
+                    Toast.makeText(context, "ফোন সেশন লগআউট করা হয়েছে", Toast.LENGTH_SHORT).show()
+                    onLogoutSubscriber()
+                }
+            )
+        }
+
         // CARD -1: App Display Mode Switcher (মোবাইল / টিভি রিমোট মোড নির্বাচন ও পরিবর্তন)
         item {
             Card(

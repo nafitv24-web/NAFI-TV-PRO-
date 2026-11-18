@@ -60,6 +60,7 @@ fun AdminControlAppScreen(
     cloudStreamRepos: List<CloudStreamRepo> = emptyList(),
     movieProviders: List<MovieProvider> = emptyList(),
     onOpenMovieProvider: (MovieProvider) -> Unit = {},
+    initialAdminTab: AdminTab = AdminTab.CHANNELS,
     onExitAdmin: () -> Unit,
     onDataChanged: () -> Unit
 ) {
@@ -82,7 +83,7 @@ fun AdminControlAppScreen(
         adminSportsItems = sportsList.filterNot { repository.isItemDeleted(it) }
     }
 
-    var selectedAdminTab by remember { mutableStateOf(AdminTab.CHANNELS) }
+    var selectedAdminTab by remember(initialAdminTab) { mutableStateOf(initialAdminTab) }
     var showAuthDialog by remember { mutableStateOf(false) }
 
     var userAnalytics by remember { mutableStateOf<AppUserAnalytics?>(null) }
@@ -592,6 +593,7 @@ fun AdminControlAppScreen(
                         val isSelected = selectedAdminTab == tab
                         val btnColor = when (tab) {
                             AdminTab.ANALYTICS -> Color(0xFF00E5FF)
+                            AdminTab.SUBSCRIPTIONS -> Color(0xFF10B981)
                             AdminTab.TICKER -> Color(0xFFEC4899)
                             AdminTab.CHANNELS -> Color(0xFF2563EB)
                             AdminTab.MOVIES -> Color(0xFF8B5CF6)
@@ -608,7 +610,7 @@ fun AdminControlAppScreen(
                             onClick = { selectedAdminTab = tab },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isSelected) btnColor else Color(0xFF1E293B),
-                                contentColor = if (isSelected) (if (tab == AdminTab.ANALYTICS) Color.Black else Color.White) else Color(0xFFCBD5E1)
+                                contentColor = if (isSelected) (if (tab == AdminTab.ANALYTICS || tab == AdminTab.SUBSCRIPTIONS) Color.Black else Color.White) else Color(0xFFCBD5E1)
                             ),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp)
@@ -616,6 +618,12 @@ fun AdminControlAppScreen(
                             Text(tab.label, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+                }
+            }
+
+            if (selectedAdminTab == AdminTab.SUBSCRIPTIONS) {
+                item {
+                    AdminSubscriptionManagementContent(repository = repository)
                 }
             }
 
@@ -2451,6 +2459,8 @@ fun AdminControlAppScreen(
                                     onClick = {
                                         if (liveTvM3uInput.isNotBlank()) {
                                             val url = liveTvM3uInput.trim()
+                                            repository.saveLiveTvM3uUrl(url)
+                                            onDataChanged()
                                             coroutineScope.launch {
                                                 val ok = repository.pushAppConfigToFirebase(liveTvM3u = url)
                                                 withContext(Dispatchers.Main) {
