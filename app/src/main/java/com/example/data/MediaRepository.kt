@@ -10021,45 +10021,245 @@ class MediaRepository(private val context: Context) {
         return prefs.getString("subscription_support_contact", "")?.trim().orEmpty()
     }
 
+    private sealed class CloudUserFetch {
+        data class Found(val record: com.example.util.UserSubscriptionRecord, val updatedAt: Long) : CloudUserFetch()
+        data object NotFound : CloudUserFetch()
+        data class Error(val message: String) : CloudUserFetch()
+    }
+
+    private fun parseSubscriptionFromFirestoreFields(
+        docId: String,
+        fields: JSONObject
+    ): Pair<com.example.util.UserSubscriptionRecord, Long> {
+        fun fsStr(key: String): String {
+            val v = fields.optJSONObject(key) ?: return ""
+            return v.optString("stringValue", "").trim()
+        }
+        fun fsLong(key: String): Long {
+            val v = fields.optJSONObject(key) ?: return 0L
+            return when {
+                v.has("integerValue") -> v.optString("integerValue").toLongOrNull() ?: v.optLong("integerValue", 0L)
+                v.has("stringValue") -> v.optString("stringValue").toLongOrNull() ?: 0L
+                v.has("doubleValue") -> v.optDouble("doubleValue", 0.0).toLong()
+                else -> 0L
+            }
+        }
+        val phone = com.example.util.SubscriptionManager.normalizePhone(fsStr("phone").ifBlank { docId })
+        val record = com.example.util.UserSubscriptionRecord(
+            phone = phone,
+            subscriptionStatus = fsStr("subscription_status"),
+            expiryDate = fsStr("expiry_date"),
+            packageType = fsStr("package_type"),
+            voucherCode = fsStr("voucher_code")
+        )
+        val updatedAt = fsLong("updated_at")
+        return Pair(record, updatedAt)
+    }
+
+    private fun buildSubscriptionFirestorePayload(
+        record: com.example.util.UserSubscriptionRecord,
+        updatedAt: Long
+    ): String {
+        val fields = JSONObject().apply {
+            put("phone", JSONObject().put("stringValue", record.phone))
+            put("subscription_status", JSONObject().put("stringValue", record.subscriptionStatus.ifBlank { "active" }))
+            put("expiry_date", JSONObject().put("stringValue", record.expiryDate))
+            put("package_type", JSONObject().put("stringValue", record.packageType.ifBlank { "1Month" }))
+            put("voucher_code", JSONObject().put("stringValue", record.voucherCode))
+            put("updated_at", JSONObject().put("integerValue", updatedAt.toString()))
+        }
+        return JSONObject().put("fields", fields).toString()
+    }
+
+    private suspend fun fetchSingleUserFromCloud(phoneInput: String): CloudUserFetch = coroutineScope {
+        val phone = com.example.util.SubscriptionManager.normalizePhone(phoneInput)
+        val safePhone = java.net.URLEncoder.encode(phone, "UTF-8").replace("+", "%20")
+        val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+
+        val fsJobs = databases.mapIndexed { idx, dbId ->
+            async {
+                try {
+                    val (ok, body) = executeFirestoreRequest(dbId, "users/$safePhone", "GET")
+                    when {
+                        ok && body.isNotBlank() && body.trimStart().startsWith("{") -> {
+                            val fields = JSONObject(body).optJSONObject("fields")
+                            if (fields != null) {
+                                val (rec, updatedAt) = parseSubscriptionFromFirestoreFields(phone, fields)
+                                Triple(rec, updatedAt, 20 - idx) to null
+                            } else {
+                                null to "NOT_FOUND"
+                            }
+                        }
+                        !ok && body.contains("HTTP 404", ignoreCase = true) -> null to "NOT_FOUND"
+                        else -> null to body.ifBlank { "Firestore ত্রুটি" }
+                    }
+                } catch (e: Exception) {
+                    null to (e.localizedMessage ?: "Firestore ত্রুটি")
+                }
+            }
+        }
+
+        val rtdbJob = async {
+            val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+            if (rtdbUrl.isBlank()) {
+                null to "RTDB URL খালি"
+            } else {
+                try {
+                    val (ok, body) = executeRtdbRequest("$rtdbUrl/users/$safePhone.json", "GET")
+                    val trimmed = body.trim()
+                    when {
+                        ok && (trimmed.isBlank() || trimmed == "null") -> null to "NOT_FOUND"
+                        ok && trimmed.startsWith("{") -> {
+                            val json = JSONObject(trimmed)
+                            val rec = com.example.util.SubscriptionManager.parseUserJson(phone, json)
+                            val updatedAt = json.optLong("updated_at", 0L)
+                            Triple(rec, updatedAt, 1) to null
+                        }
+                        else -> null to body.ifBlank { "RTDB ত্রুটি" }
+                    }
+                } catch (e: Exception) {
+                    null to (e.localizedMessage ?: "RTDB ত্রুটি")
+                }
+            }
+        }
+
+        val results = fsJobs.awaitAll() + rtdbJob.await()
+        val found = results.mapNotNull { it.first }
+            .maxWithOrNull(compareBy<Triple<com.example.util.UserSubscriptionRecord, Long, Int>> { it.second }.thenBy { it.third })
+
+        if (found != null) {
+            return@coroutineScope CloudUserFetch.Found(found.first, found.second)
+        }
+        val anyConfirmedNotFound = results.any { it.second == "NOT_FOUND" }
+        if (anyConfirmedNotFound) {
+            return@coroutineScope CloudUserFetch.NotFound
+        }
+        val firstErr = results.mapNotNull { it.second }.firstOrNull { it.isNotBlank() }
+            ?: "Firebase ক্লাউড থেকে ডাটা পড়া যায়নি।"
+        CloudUserFetch.Error(firstErr)
+    }
+
     suspend fun fetchSubscriptionSettingsFromRtdb(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
         var gateEnabled = isSubscriptionGateEnabledLocal()
         var supportContact = getSubscriptionSupportContactLocal()
-        if (rtdbUrl.isNotBlank()) {
-            val (ok, body) = executeRtdbRequest("$rtdbUrl/subscription_settings.json", "GET")
-            if (ok && body.isNotBlank() && body != "null" && body.trimStart().startsWith("{")) {
-                try {
-                    val obj = JSONObject(body)
-                    if (obj.has("gate_enabled")) {
-                        gateEnabled = obj.optBoolean("gate_enabled", true)
-                        setSubscriptionGateEnabledLocal(gateEnabled)
-                    }
-                    if (obj.has("support_contact")) {
-                        supportContact = obj.optString("support_contact", "").trim()
-                        prefs.edit().putString("subscription_support_contact", supportContact).apply()
-                    }
-                } catch (_: Exception) {}
+
+        data class SettingsCandidate(
+            val gateEnabled: Boolean?,
+            val supportContact: String?,
+            val updatedAt: Long,
+            val priority: Int
+        )
+
+        val candidates = coroutineScope {
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val fsJobs = databases.mapIndexed { idx, dbId ->
+                async {
+                    try {
+                        val (ok, body) = executeFirestoreRequest(dbId, "settings/subscription_config", "GET")
+                        if (ok && body.isNotBlank() && body.trimStart().startsWith("{")) {
+                            val fields = JSONObject(body).optJSONObject("fields")
+                            if (fields != null) {
+                                val ge = fields.optJSONObject("gate_enabled")?.let {
+                                    if (it.has("booleanValue")) it.optBoolean("booleanValue") else null
+                                }
+                                val sc = fields.optJSONObject("support_contact")?.optString("stringValue")?.trim()
+                                val ts = fields.optJSONObject("updated_at")?.optString("integerValue")?.toLongOrNull() ?: 0L
+                                return@async SettingsCandidate(ge, sc, ts, 20 - idx)
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    null
+                }
+            }
+
+            val rtdbJob = async {
+                val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+                if (rtdbUrl.isNotBlank()) {
+                    try {
+                        val (ok, body) = executeRtdbRequest("$rtdbUrl/subscription_settings.json", "GET")
+                        if (ok && body.isNotBlank() && body != "null" && body.trimStart().startsWith("{")) {
+                            val obj = JSONObject(body)
+                            val ge = if (obj.has("gate_enabled")) obj.optBoolean("gate_enabled", true) else null
+                            val sc = if (obj.has("support_contact")) obj.optString("support_contact", "").trim() else null
+                            val ts = obj.optLong("updated_at", 0L)
+                            return@async SettingsCandidate(ge, sc, ts, 5)
+                        }
+                    } catch (_: Exception) {}
+                }
+                null
+            }
+
+            (fsJobs.awaitAll() + rtdbJob.await()).filterNotNull()
+        }
+
+        val best = candidates.maxWithOrNull(compareBy<SettingsCandidate> { it.updatedAt }.thenBy { it.priority })
+        if (best != null) {
+            if (best.gateEnabled != null) {
+                gateEnabled = best.gateEnabled
+                setSubscriptionGateEnabledLocal(gateEnabled)
+            }
+            if (best.supportContact != null) {
+                supportContact = best.supportContact
+                prefs.edit().putString("subscription_support_contact", supportContact).apply()
             }
         }
         Pair(gateEnabled, supportContact)
     }
 
     suspend fun saveSubscriptionSettingsToRtdb(gateEnabled: Boolean, supportContact: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val cleanContact = supportContact.trim()
         setSubscriptionGateEnabledLocal(gateEnabled)
-        prefs.edit().putString("subscription_support_contact", supportContact.trim()).apply()
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) return@withContext Pair(false, "Firebase RTDB URL সেট করা নেই")
-        val payload = JSONObject().apply {
+        prefs.edit().putString("subscription_support_contact", cleanContact).apply()
+
+        val now = System.currentTimeMillis()
+        val fsPayload = JSONObject().put(
+            "fields",
+            JSONObject().apply {
+                put("gate_enabled", JSONObject().put("booleanValue", gateEnabled))
+                put("support_contact", JSONObject().put("stringValue", cleanContact))
+                put("updated_at", JSONObject().put("integerValue", now.toString()))
+            }
+        ).toString()
+
+        val rtdbPayload = JSONObject().apply {
             put("gate_enabled", gateEnabled)
-            put("support_contact", supportContact.trim())
-            put("updated_at", System.currentTimeMillis())
+            put("support_contact", cleanContact)
+            put("updated_at", now)
         }.toString()
-        val (ok, msg) = executeRtdbRequest("$rtdbUrl/subscription_settings.json", "PUT", payload)
-        Pair(ok, if (ok) "সাবস্ক্রিপশন সেটিংস Firebase-এ সেভ হয়েছে!" else msg)
+
+        var anySuccess = false
+        var lastError = ""
+        lastFirebaseError = ""
+
+        coroutineScope {
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val fsJobs = databases.map { dbId ->
+                async { executeFirestoreRequest(dbId, "settings/subscription_config", "PATCH", fsPayload) }
+            }
+            val rtdbJob = async {
+                val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+                if (rtdbUrl.isBlank()) Pair(false, "Firebase RTDB URL সেট করা নেই")
+                else executeRtdbRequest("$rtdbUrl/subscription_settings.json", "PUT", rtdbPayload)
+            }
+
+            val outcomes = fsJobs.awaitAll() + rtdbJob.await()
+            outcomes.forEach { (ok, msg) ->
+                if (ok) anySuccess = true else if (lastError.isBlank() && msg.isNotBlank()) lastError = msg
+            }
+        }
+
+        if (anySuccess) {
+            lastFirebaseError = ""
+            Pair(true, "সাবস্ক্রিপশন সেটিংস Firebase-এ সেভ হয়েছে!")
+        } else {
+            val err = lastError.ifBlank { "Firebase-এ সেভ করা যায়নি" }
+            lastFirebaseError = err
+            Pair(false, err)
+        }
     }
 
     /**
-     * Checks `/users/{user_phone}/` on app startup.
+     * Checks `/users/{user_phone}/` (Cloud Firestore + RTDB) on app startup.
      * Compares `expiry_date` (YYYY-MM-DD) against device date and verifies `subscription_status == "active"`.
      */
     suspend fun checkUserSubscriptionOnStartup(): com.example.util.SubscriptionCheckResult = withContext(Dispatchers.IO) {
@@ -10078,61 +10278,44 @@ class MediaRepository(private val context: Context) {
             return@withContext com.example.util.SubscriptionCheckResult.NeedsPhoneOrVoucher
         }
 
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) {
-            val cached = getCachedSubscriptionRecord()
-            val cachedEval = com.example.util.SubscriptionManager.evaluateRecord(cached)
-            return@withContext if (cachedEval is com.example.util.SubscriptionCheckResult.Active) {
-                cachedEval
-            } else {
-                com.example.util.SubscriptionCheckResult.ExpiredOrInactive(cached, "সার্ভার URL কনফিগার করা নেই।")
+        when (val fetch = fetchSingleUserFromCloud(savedPhone)) {
+            is CloudUserFetch.Found -> {
+                saveCachedSubscriptionRecord(fetch.record)
+                com.example.util.SubscriptionManager.evaluateRecord(fetch.record)
             }
-        }
-
-        val (ok, body) = executeRtdbRequest("$rtdbUrl/users/$savedPhone.json", "GET")
-        if (!ok) {
-            // Network/transient failure: honor valid local cache if not yet expired, otherwise show error
-            val cached = getCachedSubscriptionRecord()
-            val cachedEval = if (cached != null) com.example.util.SubscriptionManager.evaluateRecord(cached) else null
-            return@withContext when (cachedEval) {
-                is com.example.util.SubscriptionCheckResult.Active -> {
-                    com.example.util.SubscriptionCheckResult.NetworkError(
-                        message = body,
-                        cachedActive = cachedEval
+            is CloudUserFetch.NotFound -> {
+                prefs.edit()
+                    .remove("cached_sub_status")
+                    .remove("cached_sub_expiry")
+                    .apply()
+                com.example.util.SubscriptionCheckResult.ExpiredOrInactive(
+                    record = null,
+                    reason = "আপনার নম্বর ($savedPhone) Firebase ডাটাবেসে পাওয়া যায়নি।"
+                )
+            }
+            is CloudUserFetch.Error -> {
+                val cached = getCachedSubscriptionRecord()
+                val cachedEval = if (cached != null) com.example.util.SubscriptionManager.evaluateRecord(cached) else null
+                when (cachedEval) {
+                    is com.example.util.SubscriptionCheckResult.Active -> {
+                        com.example.util.SubscriptionCheckResult.NetworkError(
+                            message = fetch.message,
+                            cachedActive = cachedEval
+                        )
+                    }
+                    is com.example.util.SubscriptionCheckResult.ExpiredOrInactive -> cachedEval
+                    else -> com.example.util.SubscriptionCheckResult.NetworkError(
+                        message = fetch.message,
+                        cachedActive = null
                     )
                 }
-                is com.example.util.SubscriptionCheckResult.ExpiredOrInactive -> cachedEval
-                else -> com.example.util.SubscriptionCheckResult.NetworkError(message = body, cachedActive = null)
             }
-        }
-
-        val trimmed = body.trim()
-        if (trimmed.isBlank() || trimmed == "null") {
-            prefs.edit()
-                .remove("cached_sub_status")
-                .remove("cached_sub_expiry")
-                .apply()
-            return@withContext com.example.util.SubscriptionCheckResult.ExpiredOrInactive(
-                record = null,
-                reason = "আপনার নম্বর ($savedPhone) Firebase ডাটাবেসে পাওয়া যায়নি।"
-            )
-        }
-
-        return@withContext try {
-            val json = JSONObject(trimmed)
-            val record = com.example.util.SubscriptionManager.parseUserJson(savedPhone, json)
-            saveCachedSubscriptionRecord(record)
-            com.example.util.SubscriptionManager.evaluateRecord(record)
-        } catch (_: Exception) {
-            com.example.util.SubscriptionCheckResult.ExpiredOrInactive(
-                record = null,
-                reason = "সাবস্ক্রিপশন তথ্য পড়া সম্ভব হয়নি।"
-            )
         }
     }
 
     /**
-     * Verifies phone number + voucher code against Firebase RTDB `/users/{phone}/` (or standalone `/vouchers/{code}/`).
+     * Verifies phone number + voucher code against Firebase `/users/{phone}/` (Firestore + RTDB)
+     * or standalone `/vouchers/{code}/`.
      */
     suspend fun verifyAndActivateSubscription(
         phoneInput: String,
@@ -10148,23 +10331,12 @@ class MediaRepository(private val context: Context) {
             )
         }
 
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) {
-            return@withContext Pair(
-                false,
-                com.example.util.SubscriptionCheckResult.NetworkError("Firebase RTDB URL পাওয়া যায়নি।")
-            )
-        }
-
-        val (ok, body) = executeRtdbRequest("$rtdbUrl/users/$phone.json", "GET")
-        if (!ok) {
-            return@withContext Pair(false, com.example.util.SubscriptionCheckResult.NetworkError(body))
-        }
-
-        val trimmed = body.trim()
-        if (trimmed.isNotBlank() && trimmed != "null" && trimmed.startsWith("{")) {
-            try {
-                val record = com.example.util.SubscriptionManager.parseUserJson(phone, JSONObject(trimmed))
+        when (val fetch = fetchSingleUserFromCloud(phone)) {
+            is CloudUserFetch.Error -> {
+                return@withContext Pair(false, com.example.util.SubscriptionCheckResult.NetworkError(fetch.message))
+            }
+            is CloudUserFetch.Found -> {
+                val record = fetch.record
                 if (record.voucherCode.isNotBlank()) {
                     if (voucher.isBlank()) {
                         return@withContext Pair(
@@ -10193,51 +10365,109 @@ class MediaRepository(private val context: Context) {
                 } else {
                     Pair(false, eval)
                 }
-            } catch (_: Exception) {}
+            }
+            is CloudUserFetch.NotFound -> {
+                // Continue to optional voucher pool check below
+            }
         }
 
-        // Optional fallback: if /users/{phone} doesn't exist yet, check /vouchers/{voucher} pool
+        // Optional fallback: if /users/{phone} doesn't exist yet, check /vouchers/{voucher} pool in Firestore & RTDB
         if (voucher.isNotBlank()) {
             val safeVoucher = voucher.replace(".", "").replace("#", "").replace("$", "").replace("[", "").replace("]", "").replace("/", "")
-            val (vOk, vBody) = executeRtdbRequest("$rtdbUrl/vouchers/$safeVoucher.json", "GET")
-            val vTrim = vBody.trim()
-            if (vOk && vTrim.isNotBlank() && vTrim != "null" && vTrim.startsWith("{")) {
-                try {
-                    val vObj = JSONObject(vTrim)
-                    val isUsed = vObj.optBoolean("used", false)
-                    val assignedTo = vObj.optString("used_by", "")
-                    if (!isUsed || assignedTo == phone) {
-                        val pkg = vObj.optString("package_type", "1Month").ifBlank { "1Month" }
-                        val days = vObj.optInt("days", 30).coerceAtLeast(1)
-                        val newExpiry = vObj.optString("expiry_date", "").takeIf {
-                            com.example.util.SubscriptionManager.isDateValid(it)
-                        } ?: com.example.util.SubscriptionManager.addDaysToDateString(days)
+            val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
 
-                        val newRecord = com.example.util.UserSubscriptionRecord(
-                            phone = phone,
-                            subscriptionStatus = "active",
-                            expiryDate = newExpiry,
-                            packageType = pkg,
-                            voucherCode = safeVoucher
-                        )
-                        val (savedOk, _) = saveUserSubscriptionToRtdb(newRecord)
-                        if (savedOk) {
-                            val usedObj = JSONObject().apply {
-                                put("used", true)
-                                put("used_by", phone)
-                                put("used_at", System.currentTimeMillis())
-                            }.toString()
-                            executeRtdbRequest("$rtdbUrl/vouchers/$safeVoucher.json", "PATCH", usedObj)
-                            saveCachedSubscriptionRecord(newRecord)
-                            return@withContext Pair(true, com.example.util.SubscriptionManager.evaluateRecord(newRecord))
+            var voucherPkg = "1Month"
+            var voucherDays = 30
+            var voucherExpiry = ""
+            var voucherFound = false
+            var alreadyUsedByOther = false
+
+            // 1. Check Firestore vouchers/{code}
+            for (dbId in listOf(FIRESTORE_DATABASE_ID, "(default)")) {
+                val (vOk, vBody) = executeFirestoreRequest(dbId, "vouchers/$safeVoucher", "GET")
+                if (vOk && vBody.isNotBlank() && vBody.trimStart().startsWith("{")) {
+                    val fields = JSONObject(vBody).optJSONObject("fields")
+                    if (fields != null) {
+                        voucherFound = true
+                        val isUsed = fields.optJSONObject("used")?.optBoolean("booleanValue", false) ?: false
+                        val assignedTo = fields.optJSONObject("used_by")?.optString("stringValue", "").orEmpty()
+                        if (isUsed && assignedTo != phone) {
+                            alreadyUsedByOther = true
+                        } else {
+                            voucherPkg = fields.optJSONObject("package_type")?.optString("stringValue", "1Month").orEmpty().ifBlank { "1Month" }
+                            voucherDays = (fields.optJSONObject("days")?.optString("integerValue")?.toIntOrNull() ?: 30).coerceAtLeast(1)
+                            voucherExpiry = fields.optJSONObject("expiry_date")?.optString("stringValue", "").orEmpty()
                         }
-                    } else {
-                        return@withContext Pair(
-                            false,
-                            com.example.util.SubscriptionCheckResult.ExpiredOrInactive(null, "এই ভাউচার কোডটি ইতোমধ্যে ব্যবহৃত হয়েছে।")
-                        )
+                        break
                     }
-                } catch (_: Exception) {}
+                }
+            }
+
+            // 2. Fallback check RTDB vouchers/{code}.json
+            if (!voucherFound && rtdbUrl.isNotBlank()) {
+                val (vOk, vBody) = executeRtdbRequest("$rtdbUrl/vouchers/$safeVoucher.json", "GET")
+                val vTrim = vBody.trim()
+                if (vOk && vTrim.isNotBlank() && vTrim != "null" && vTrim.startsWith("{")) {
+                    try {
+                        val vObj = JSONObject(vTrim)
+                        voucherFound = true
+                        val isUsed = vObj.optBoolean("used", false)
+                        val assignedTo = vObj.optString("used_by", "")
+                        if (isUsed && assignedTo != phone) {
+                            alreadyUsedByOther = true
+                        } else {
+                            voucherPkg = vObj.optString("package_type", "1Month").ifBlank { "1Month" }
+                            voucherDays = vObj.optInt("days", 30).coerceAtLeast(1)
+                            voucherExpiry = vObj.optString("expiry_date", "")
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            if (alreadyUsedByOther) {
+                return@withContext Pair(
+                    false,
+                    com.example.util.SubscriptionCheckResult.ExpiredOrInactive(null, "এই ভাউচার কোডটি ইতোমধ্যে ব্যবহৃত হয়েছে।")
+                )
+            }
+
+            if (voucherFound) {
+                val newExpiry = voucherExpiry.takeIf {
+                    com.example.util.SubscriptionManager.isDateValid(it)
+                } ?: com.example.util.SubscriptionManager.addDaysToDateString(voucherDays)
+
+                val newRecord = com.example.util.UserSubscriptionRecord(
+                    phone = phone,
+                    subscriptionStatus = "active",
+                    expiryDate = newExpiry,
+                    packageType = voucherPkg,
+                    voucherCode = safeVoucher
+                )
+                val (savedOk, _) = saveUserSubscriptionToRtdb(newRecord)
+                if (savedOk) {
+                    val usedNow = System.currentTimeMillis()
+                    val fsUsedPayload = JSONObject().put(
+                        "fields",
+                        JSONObject().apply {
+                            put("used", JSONObject().put("booleanValue", true))
+                            put("used_by", JSONObject().put("stringValue", phone))
+                            put("used_at", JSONObject().put("integerValue", usedNow.toString()))
+                        }
+                    ).toString()
+                    for (dbId in listOf(FIRESTORE_DATABASE_ID, "(default)")) {
+                        executeFirestoreRequest(dbId, "vouchers/$safeVoucher", "PATCH", fsUsedPayload)
+                    }
+                    if (rtdbUrl.isNotBlank()) {
+                        val usedObj = JSONObject().apply {
+                            put("used", true)
+                            put("used_by", phone)
+                            put("used_at", usedNow)
+                        }.toString()
+                        executeRtdbRequest("$rtdbUrl/vouchers/$safeVoucher.json", "PATCH", usedObj)
+                    }
+                    saveCachedSubscriptionRecord(newRecord)
+                    return@withContext Pair(true, com.example.util.SubscriptionManager.evaluateRecord(newRecord))
+                }
             }
         }
 
@@ -10251,49 +10481,152 @@ class MediaRepository(private val context: Context) {
     }
 
     suspend fun fetchAllSubscribedUsersFromRtdb(): List<com.example.util.UserSubscriptionRecord> = withContext(Dispatchers.IO) {
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) return@withContext emptyList()
-        val (ok, body) = executeRtdbRequest("$rtdbUrl/users.json", "GET")
-        val trimmed = body.trim()
-        if (!ok || trimmed.isBlank() || trimmed == "null" || !trimmed.startsWith("{")) {
-            return@withContext emptyList()
-        }
-        val list = mutableListOf<com.example.util.UserSubscriptionRecord>()
-        try {
-            val root = JSONObject(trimmed)
-            val keys = root.keys()
-            while (keys.hasNext()) {
-                val phoneKey = keys.next()
-                val obj = root.optJSONObject(phoneKey) ?: continue
-                list.add(com.example.util.SubscriptionManager.parseUserJson(phoneKey, obj))
+        val merged = linkedMapOf<String, Pair<com.example.util.UserSubscriptionRecord, Long>>()
+
+        fun mergeRecord(rec: com.example.util.UserSubscriptionRecord, updatedAt: Long) {
+            if (rec.phone.length < 6) return
+            val existing = merged[rec.phone]
+            if (existing == null || updatedAt > existing.second || (existing.first.expiryDate.isBlank() && rec.expiryDate.isNotBlank())) {
+                merged[rec.phone] = Pair(rec, updatedAt)
             }
-        } catch (_: Exception) {}
-        list.sortedByDescending { it.expiryDate }
+        }
+
+        coroutineScope {
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val fsJobs = databases.map { dbId ->
+                async {
+                    val items = mutableListOf<Pair<com.example.util.UserSubscriptionRecord, Long>>()
+                    try {
+                        val body = executeFirestoreQuery(dbId, "users")
+                        if (!body.isNullOrBlank() && body.trimStart().startsWith("[")) {
+                            val arr = JSONArray(body)
+                            for (i in 0 until arr.length()) {
+                                val entry = arr.optJSONObject(i) ?: continue
+                                val doc = entry.optJSONObject("document") ?: continue
+                                val docId = doc.optString("name", "").substringAfterLast("/")
+                                val fields = doc.optJSONObject("fields") ?: continue
+                                items.add(parseSubscriptionFromFirestoreFields(docId, fields))
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    items
+                }
+            }
+
+            val rtdbJob = async {
+                val items = mutableListOf<Pair<com.example.util.UserSubscriptionRecord, Long>>()
+                val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+                if (rtdbUrl.isNotBlank()) {
+                    try {
+                        val (ok, body) = executeRtdbRequest("$rtdbUrl/users.json", "GET")
+                        val trimmed = body.trim()
+                        if (ok && trimmed.isNotBlank() && trimmed != "null" && trimmed.startsWith("{")) {
+                            val root = JSONObject(trimmed)
+                            val keys = root.keys()
+                            while (keys.hasNext()) {
+                                val phoneKey = keys.next()
+                                val obj = root.optJSONObject(phoneKey) ?: continue
+                                val rec = com.example.util.SubscriptionManager.parseUserJson(phoneKey, obj)
+                                val updatedAt = obj.optLong("updated_at", 0L)
+                                items.add(Pair(rec, updatedAt))
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+                items
+            }
+
+            (fsJobs.awaitAll().flatten() + rtdbJob.await()).forEach { (rec, updatedAt) ->
+                mergeRecord(rec, updatedAt)
+            }
+        }
+
+        merged.values.map { it.first }.sortedByDescending { it.expiryDate }
     }
 
     suspend fun saveUserSubscriptionToRtdb(record: com.example.util.UserSubscriptionRecord): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val phone = com.example.util.SubscriptionManager.normalizePhone(record.phone)
         if (phone.length < 6) return@withContext Pair(false, "সঠিক ফোন নম্বর দিন")
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) return@withContext Pair(false, "Firebase RTDB URL সেট করা নেই")
+
+        val safePhone = java.net.URLEncoder.encode(phone, "UTF-8").replace("+", "%20")
         val cleanRecord = record.copy(phone = phone)
-        val payload = com.example.util.SubscriptionManager.toUserJson(cleanRecord).toString()
-        val (ok, msg) = executeRtdbRequest("$rtdbUrl/users/$phone.json", "PUT", payload)
-        if (ok && phone == getSavedSubscriberPhone()) {
-            saveCachedSubscriptionRecord(cleanRecord)
+        val now = System.currentTimeMillis()
+        val fsPayload = buildSubscriptionFirestorePayload(cleanRecord, now)
+        val rtdbJson = com.example.util.SubscriptionManager.toUserJson(cleanRecord).apply {
+            put("updated_at", now)
+        }.toString()
+
+        var anySuccess = false
+        var lastError = ""
+        lastFirebaseError = ""
+
+        coroutineScope {
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val fsJobs = databases.map { dbId ->
+                async { executeFirestoreRequest(dbId, "users/$safePhone", "PATCH", fsPayload) }
+            }
+            val rtdbJob = async {
+                val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+                if (rtdbUrl.isBlank()) Pair(false, "Firebase RTDB URL সেট করা নেই")
+                else executeRtdbRequest("$rtdbUrl/users/$safePhone.json", "PUT", rtdbJson)
+            }
+
+            val outcomes = fsJobs.awaitAll() + rtdbJob.await()
+            outcomes.forEach { (ok, msg) ->
+                if (ok) anySuccess = true else if (lastError.isBlank() && msg.isNotBlank()) lastError = msg
+            }
         }
-        Pair(ok, if (ok) "ইউজার ($phone) Firebase-এ সফলভাবে সংরক্ষিত হয়েছে!" else msg)
+
+        if (anySuccess) {
+            lastFirebaseError = ""
+            if (phone == getSavedSubscriberPhone()) {
+                saveCachedSubscriptionRecord(cleanRecord)
+            }
+            Pair(true, "ইউজার ($phone) Firebase-এ সফলভাবে সংরক্ষিত হয়েছে!")
+        } else {
+            val finalErr = lastError.ifBlank { "Firebase ক্লাউডে সেভ ব্যর্থ হয়েছে" }
+            lastFirebaseError = finalErr
+            Pair(false, finalErr)
+        }
     }
 
     suspend fun deleteUserSubscriptionFromRtdb(phoneInput: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val phone = com.example.util.SubscriptionManager.normalizePhone(phoneInput)
         if (phone.isBlank()) return@withContext Pair(false, "ফোন নম্বর খালি")
-        val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
-        if (rtdbUrl.isBlank()) return@withContext Pair(false, "Firebase RTDB URL সেট করা নেই")
-        val (ok, msg) = executeRtdbRequest("$rtdbUrl/users/$phone.json", "DELETE")
-        Pair(ok, if (ok) "ইউজার ($phone) ডিলিট হয়েছে" else msg)
+        val safePhone = java.net.URLEncoder.encode(phone, "UTF-8").replace("+", "%20")
+
+        var anySuccess = false
+        var lastError = ""
+        lastFirebaseError = ""
+
+        coroutineScope {
+            val databases = listOf(FIRESTORE_DATABASE_ID, "(default)")
+            val fsJobs = databases.map { dbId ->
+                async { executeFirestoreRequest(dbId, "users/$safePhone", "DELETE") }
+            }
+            val rtdbJob = async {
+                val rtdbUrl = getSavedFirebaseUrl().trimEnd('/')
+                if (rtdbUrl.isBlank()) Pair(false, "Firebase RTDB URL সেট করা নেই")
+                else executeRtdbRequest("$rtdbUrl/users/$safePhone.json", "DELETE")
+            }
+
+            val outcomes = fsJobs.awaitAll() + rtdbJob.await()
+            outcomes.forEach { (ok, msg) ->
+                if (ok) anySuccess = true else if (lastError.isBlank() && msg.isNotBlank()) lastError = msg
+            }
+        }
+
+        if (anySuccess) {
+            lastFirebaseError = ""
+            Pair(true, "ইউজার ($phone) ডিলিট হয়েছে")
+        } else {
+            val finalErr = lastError.ifBlank { "ইউজার ডিলিট করা যায়নি" }
+            lastFirebaseError = finalErr
+            Pair(false, finalErr)
+        }
     }
 }
+
 
 
 
