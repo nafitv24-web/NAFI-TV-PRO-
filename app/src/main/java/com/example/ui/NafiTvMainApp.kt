@@ -78,6 +78,16 @@ import com.example.model.ActiveUserInfo
 import com.example.model.AppNotification
 import com.example.model.AppUserAnalytics
 import com.example.ui.components.BreakingNewsTickerBar
+import com.example.ui.components.FloatingLiquidWaveNavBar
+import com.example.ui.components.FloatingLiquidWaveNavRail
+import com.example.ui.theme.AccentAmber
+import com.example.ui.theme.AccentCyan
+import com.example.ui.theme.AccentEmerald
+import com.example.ui.theme.ChannelCardSurface
+import com.example.ui.theme.CrimsonBright
+import com.example.ui.theme.CrimsonGlow
+import com.example.ui.theme.HindSiliguriFontFamily
+import com.example.ui.theme.SlateNavyBackground
 import com.example.model.AppUpdateInfo
 import com.example.model.CloudStreamRepo
 import com.example.model.MediaItem
@@ -1035,119 +1045,36 @@ fun NafiTvMainApp(
         }
 
         if (isTvMode) {
-            // TV MODE: Sidebar Menu Rail on Left + Content on Right (Matching uploaded screenshot)
+            // TV MODE: Floating Matte-Black Crimson Liquid-Wave Navigation Rail on Left + Dark Slate-Navy (#0B111A) Content on Right
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF020617))
+                    .background(SlateNavyBackground)
             ) {
-                // Left Vertical Navigation Rail
-                Surface(
+                // Left Floating Liquid-Wave Navigation Rail (Matte-Black #141416 + Glowing Crimson #D90429 Wave)
+                FloatingLiquidWaveNavRail(
+                    currentTab = currentTab,
+                    onSelectTab = { currentTab = it },
                     modifier = Modifier
-                        .width(86.dp)
-                        .fillMaxHeight()
                         .statusBarsPadding()
-                        .navigationBarsPadding(),
-                    color = Color(0xFF0B1328),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E293B))
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(vertical = 12.dp, horizontal = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AppTab.values().forEach { tab ->
-                            val isSelected = currentTab == tab
-                            var isFocused by remember { mutableStateOf(false) }
-                            val tabScale by animateFloatAsState(
-                                targetValue = if (isFocused) 1.05f else 1.0f,
-                                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                                label = "tvTabScale"
-                            )
-                            val containerColor by animateColorAsState(
-                                targetValue = when {
-                                    isFocused -> Color(0xFF1E3A8A).copy(alpha = 0.65f)
-                                    isSelected -> Color(0xFF2563EB).copy(alpha = 0.35f)
-                                    else -> Color.Transparent
-                                },
-                                animationSpec = tween(150),
-                                label = "tvTabColor"
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = containerColor,
-                                border = when {
-                                    isFocused -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF38BDF8))
-                                    isSelected -> androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f))
-                                    else -> null
-                                },
-                                shadowElevation = if (isFocused) 4.dp else 0.dp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .scale(tabScale)
-                                    .onFocusChanged { isFocused = it.isFocused }
-                                    .focusable()
-                                    .clickable { currentTab = tab }
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 10.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = when (tab) {
-                                            AppTab.EVENTS -> Icons.Rounded.EmojiEvents
-                                            AppTab.LIVE_TV -> Icons.Rounded.Tv
-                                            AppTab.MOVIES -> Icons.Rounded.Movie
-                                            AppTab.PLAYLIST -> Icons.Rounded.Folder
-                                            AppTab.MENU -> Icons.Rounded.Menu
-                                        },
-                                        contentDescription = tab.englishLabel,
-                                        tint = if (isFocused || isSelected) Color(0xFF38BDF8) else Color(0xFF94A3B8),
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    Text(
-                                        text = tab.englishLabel,
-                                        color = if (isFocused || isSelected) Color.White else Color(0xFF94A3B8),
-                                        fontSize = 11.sp,
-                                        fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        textAlign = TextAlign.Center,
-                                        maxLines = 1
-                                    )
-                                    if (isFocused || isSelected) {
-                                        Box(
-                                            modifier = Modifier
-                                                .width(16.dp)
-                                                .height(3.dp)
-                                                .clip(RoundedCornerShape(2.dp))
-                                                .background(Color(0xFF38BDF8))
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                        .navigationBarsPadding()
+                )
 
-                // Right Content Area with Top Action Header
+                // Right Content Area with Dark Slate-Navy Top Header, Sync Bar & Breaking News
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .navigationBarsPadding()
-                        .background(Color(0xFF020617))
+                        .background(SlateNavyBackground)
                 ) {
-                    // Top Action Bar Header
+                    // Top Action Bar Header (TV Mode — matching Dark Slate-Navy + Emerald/Crimson design)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0F172A))
+                            .background(SlateNavyBackground)
                             .statusBarsPadding()
-                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1159,8 +1086,8 @@ fun NafiTvMainApp(
                                     painter = painterResource(id = R.drawable.app_logo),
                                     contentDescription = "NAFI TV Logo",
                                     modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(10.dp)),
                                     contentScale = ContentScale.Fit
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
@@ -1168,15 +1095,15 @@ fun NafiTvMainApp(
                                     Text(
                                         text = "Live TV",
                                         color = Color.White,
-                                        fontSize = 19.sp,
-                                        fontWeight = FontWeight.Bold
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.ExtraBold
                                     )
                                 } else if (currentTab == AppTab.EVENTS) {
                                     Text(
                                         text = "Live Events",
                                         color = Color.White,
-                                        fontSize = 19.sp,
-                                        fontWeight = FontWeight.Bold
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.ExtraBold
                                     )
                                 } else {
                                     Column {
@@ -1184,15 +1111,15 @@ fun NafiTvMainApp(
                                             Text(
                                                 text = "NAFI TV Pro",
                                                 color = Color.White,
-                                                fontSize = 16.sp,
+                                                fontSize = 17.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Box(
                                                 modifier = Modifier
-                                                    .size(7.dp)
+                                                    .size(8.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(0xFFEF4444))
+                                                    .background(CrimsonGlow)
                                             )
                                         }
                                         Text(
@@ -1204,48 +1131,55 @@ fun NafiTvMainApp(
                                 }
                             }
 
-                            // Action Quick Controls (Mobile / TV Toggle + Refresh)
+                            // Action Quick Controls (Device Mode Pill + Notification Bell + Status Dot/Refresh)
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Device Mode Selector Button (Auto / Mobile / TV)
+                                // Device Mode Selector Pill (Auto / Mobile / TV)
                                 var isTvModeSwitchFocused by remember { mutableStateOf(false) }
                                 val tvModeSwitchScale by animateFloatAsState(
-                                    targetValue = if (isTvModeSwitchFocused) 1.08f else 1.0f,
+                                    targetValue = if (isTvModeSwitchFocused) 1.07f else 1.0f,
                                     animationSpec = tween(180, easing = FastOutSlowInEasing),
                                     label = "tvModeSwitchScale"
                                 )
                                 Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = if (isTvModeSwitchFocused) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color(0xFF1E293B),
+                                    shape = RoundedCornerShape(50),
+                                    color = if (isTvModeSwitchFocused) Color(0xFF2B0B14) else ChannelCardSurface,
                                     border = androidx.compose.foundation.BorderStroke(
-                                        if (isTvModeSwitchFocused) 2.dp else 1.dp,
-                                        if (isTvModeSwitchFocused) Color(0xFF38BDF8) else Color(0xFF00E5FF).copy(alpha = 0.6f)
+                                        if (isTvModeSwitchFocused) 2.dp else 1.2.dp,
+                                        when {
+                                            isTvModeSwitchFocused -> CrimsonBright
+                                            activeUserMode == AppUserMode.AUTO -> AccentEmerald
+                                            activeUserMode == AppUserMode.MOBILE -> AccentCyan
+                                            else -> AccentEmerald
+                                        }
                                     ),
-                                    shadowElevation = if (isTvModeSwitchFocused) 4.dp else 0.dp,
+                                    shadowElevation = if (isTvModeSwitchFocused) 6.dp else 0.dp,
                                     modifier = Modifier
                                         .scale(tvModeSwitchScale)
                                         .onFocusChanged { isTvModeSwitchFocused = it.isFocused }
                                         .focusable()
                                         .clickable { showDeviceModeDialog = true }
+                                        .testTag("tv_auto_mode_button")
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         Icon(
                                             imageVector = when (activeUserMode) {
-                                                AppUserMode.AUTO -> Icons.Rounded.Devices
+                                                AppUserMode.AUTO -> Icons.Rounded.Tv
                                                 AppUserMode.MOBILE -> Icons.Rounded.PhoneAndroid
                                                 else -> Icons.Rounded.Tv
                                             },
                                             contentDescription = "ডিভাইস মোড পরিবর্তন",
-                                            tint = when (activeUserMode) {
-                                                AppUserMode.AUTO -> Color(0xFF10B981)
-                                                AppUserMode.MOBILE -> Color(0xFF00E5FF)
-                                                else -> Color(0xFFC084FC)
+                                            tint = when {
+                                                isTvModeSwitchFocused -> CrimsonBright
+                                                activeUserMode == AppUserMode.AUTO -> AccentEmerald
+                                                activeUserMode == AppUserMode.MOBILE -> AccentCyan
+                                                else -> AccentEmerald
                                             },
                                             modifier = Modifier.size(15.dp)
                                         )
@@ -1256,6 +1190,7 @@ fun NafiTvMainApp(
                                                 else -> "টিভি মোড"
                                             },
                                             color = Color.White,
+                                            fontFamily = HindSiliguriFontFamily,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -1272,39 +1207,50 @@ fun NafiTvMainApp(
                                 )
                                 Surface(
                                     shape = CircleShape,
-                                    color = if (isTvNotifFocused) Color(0xFF1E3A8A).copy(alpha = 0.6f) else if (tvUnreadNotifCount > 0) Color(0xFF0284C7).copy(alpha = 0.25f) else Color(0xFF1E293B),
-                                    border = when {
-                                        isTvNotifFocused -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF38BDF8))
-                                        tvUnreadNotifCount > 0 -> androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8))
-                                        else -> null
-                                    },
-                                    shadowElevation = if (isTvNotifFocused) 4.dp else 0.dp,
+                                    color = if (isTvNotifFocused) Color(0xFF2B0B14) else if (tvUnreadNotifCount > 0) AccentCyan.copy(alpha = 0.2f) else ChannelCardSurface,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        if (isTvNotifFocused) 2.dp else 1.dp,
+                                        when {
+                                            isTvNotifFocused -> CrimsonBright
+                                            tvUnreadNotifCount > 0 -> AccentCyan
+                                            else -> Color(0xFF1E293B)
+                                        }
+                                    ),
+                                    shadowElevation = if (isTvNotifFocused) 6.dp else 0.dp,
                                     modifier = Modifier
                                         .scale(tvNotifScale)
                                         .onFocusChanged { isTvNotifFocused = it.isFocused }
                                         .focusable()
                                         .clickable { showNotificationCenterDialog = true }
+                                        .testTag("tv_notification_bell_button")
                                 ) {
-                                    Box(modifier = Modifier.padding(7.dp)) {
+                                    Box(
+                                        modifier = Modifier.padding(8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
                                         Icon(
                                             imageVector = if (tvUnreadNotifCount > 0) Icons.Rounded.NotificationsActive else Icons.Rounded.Notifications,
                                             contentDescription = "Notifications",
-                                            tint = if (isTvNotifFocused || tvUnreadNotifCount > 0) Color(0xFF38BDF8) else Color.White,
-                                            modifier = Modifier.size(15.dp)
+                                            tint = when {
+                                                isTvNotifFocused -> CrimsonBright
+                                                tvUnreadNotifCount > 0 -> AccentCyan
+                                                else -> Color.White
+                                            },
+                                            modifier = Modifier.size(16.dp)
                                         )
                                         if (tvUnreadNotifCount > 0) {
                                             Box(
                                                 modifier = Modifier
-                                                    .size(6.dp)
+                                                    .size(7.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(0xFFEF4444))
+                                                    .background(CrimsonGlow)
                                                     .align(Alignment.TopEnd)
                                             )
                                         }
                                     }
                                 }
 
-                                // Refresh Button
+                                // Status Indicator Dot + Refresh Button (TV)
                                 var isRefreshFocused by remember { mutableStateOf(false) }
                                 val refreshScale by animateFloatAsState(
                                     targetValue = if (isRefreshFocused) 1.08f else 1.0f,
@@ -1313,37 +1259,52 @@ fun NafiTvMainApp(
                                 )
                                 Surface(
                                     shape = CircleShape,
-                                    color = if (isRefreshFocused) Color(0xFF1E3A8A).copy(alpha = 0.6f) else Color(0xFF1E293B),
-                                    border = if (isRefreshFocused) androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF38BDF8)) else null,
-                                    shadowElevation = if (isRefreshFocused) 4.dp else 0.dp,
+                                    color = if (isRefreshFocused) Color(0xFF2B0B14) else ChannelCardSurface,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        if (isRefreshFocused) 2.dp else 1.dp,
+                                        if (isRefreshFocused) CrimsonBright else Color(0xFF1E293B)
+                                    ),
+                                    shadowElevation = if (isRefreshFocused) 6.dp else 0.dp,
                                     modifier = Modifier
                                         .scale(refreshScale)
                                         .onFocusChanged { isRefreshFocused = it.isFocused }
                                         .focusable()
                                         .clickable { refreshAllData() }
+                                        .testTag("tv_refresh_channels_button")
                                 ) {
-                                    Box(modifier = Modifier.padding(7.dp)) {
+                                    Box(
+                                        modifier = Modifier.padding(8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
                                         if (isRefreshing) {
                                             CircularProgressIndicator(
-                                                color = Color(0xFF00E5FF),
+                                                color = AccentCyan,
                                                 strokeWidth = 2.dp,
-                                                modifier = Modifier.size(15.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         } else {
                                             Icon(
                                                 imageVector = Icons.Rounded.Refresh,
                                                 contentDescription = "Refresh",
-                                                tint = if (isRefreshFocused) Color(0xFF00E5FF) else Color.White,
-                                                modifier = Modifier.size(15.dp)
+                                                tint = if (isRefreshFocused) CrimsonBright else Color.White,
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
+                                        // Live online status dot
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isRefreshing) AccentAmber else AccentEmerald)
+                                                .align(Alignment.TopEnd)
+                                        )
                                     }
                                 }
                             }
                         }
                     }
 
-                    // Phased Sequential Loading Indicator Banner (TV Mode)
+                    // Phased Sequential Loading / Sync Progress Bar (TV Mode — Amber/Gold "ধাপ X/4")
                     androidx.compose.animation.AnimatedVisibility(
                         visible = isRefreshing && currentLoadingStage != LoadingStage.IDLE,
                         enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
@@ -1354,31 +1315,36 @@ fun NafiTvMainApp(
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 3.dp),
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF0F172A),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f))
+                            color = ChannelCardSurface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E293B))
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    color = Color(0xFF00E5FF),
-                                    strokeWidth = 2.dp
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(AccentCyan)
                                 )
                                 Text(
-                                    text = currentLoadingStage.title,
-                                    color = Color(0xFF38BDF8),
+                                    text = "• ${currentLoadingStage.title}",
+                                    color = Color(0xFFE2E8F0),
+                                    fontFamily = HindSiliguriFontFamily,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
                                     text = "ধাপ ${currentLoadingStage.step}/4",
-                                    color = Color(0xFF10B981),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
+                                    color = AccentAmber,
+                                    fontFamily = HindSiliguriFontFamily,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.ExtraBold
                                 )
                             }
                         }
@@ -1567,232 +1533,259 @@ fun NafiTvMainApp(
                 }
             }
         } else {
-            // MOBILE MODE: Standard Scaffold with Top Bar + Content + Bottom Navigation Bar
+            // MOBILE MODE: Dark Slate-Navy (#0B111A) Scaffold with Top Bar + Content + Floating Liquid-Wave Nav Bar
             Scaffold(
                 topBar = {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0F172A))
+                            .background(SlateNavyBackground)
                             .statusBarsPadding()
                     ) {
                         // Top Action Bar Header
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Image(
-                                    painter = painterResource(id = R.drawable.app_logo),
-                                    contentDescription = "NAFI TV Logo",
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(RoundedCornerShape(10.dp)),
-                                    contentScale = ContentScale.Fit
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                if (currentTab == AppTab.LIVE_TV) {
-                                    Text(
-                                        text = "Live TV",
-                                        color = Color.White,
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Bold
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.app_logo),
+                                        contentDescription = "NAFI TV Logo",
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(10.dp)),
+                                        contentScale = ContentScale.Fit
                                     )
-                                } else if (currentTab == AppTab.EVENTS) {
-                                    Text(
-                                        text = "Live Events",
-                                        color = Color.White,
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                } else {
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    if (currentTab == AppTab.LIVE_TV) {
+                                        Text(
+                                            text = "Live TV",
+                                            color = Color.White,
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    } else if (currentTab == AppTab.EVENTS) {
+                                        Text(
+                                            text = "Live Events",
+                                            color = Color.White,
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    } else {
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = "NAFI TV Pro",
+                                                    color = Color.White,
+                                                    fontSize = 17.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .clip(CircleShape)
+                                                        .background(CrimsonGlow)
+                                                )
+                                            }
                                             Text(
-                                                text = "NAFI TV Pro",
+                                                text = currentTab.englishLabel,
+                                                color = Color(0xFF94A3B8),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Right Controls: Green-bordered "অটো মোড" pill + Notification Bell + Status Dot/Refresh
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Device Mode Selector Pill ("অটো মোড" with green border & TV/device icon)
+                                    Surface(
+                                        shape = RoundedCornerShape(50),
+                                        color = ChannelCardSurface,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.2.dp,
+                                            when (activeUserMode) {
+                                                AppUserMode.AUTO -> AccentEmerald
+                                                AppUserMode.MOBILE -> AccentCyan
+                                                else -> Color(0xFFC084FC)
+                                            }
+                                        ),
+                                        modifier = Modifier
+                                            .clickable { showDeviceModeDialog = true }
+                                            .testTag("auto_mode_button")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = when (activeUserMode) {
+                                                    AppUserMode.AUTO -> Icons.Rounded.Tv
+                                                    AppUserMode.MOBILE -> Icons.Rounded.PhoneAndroid
+                                                    else -> Icons.Rounded.Tv
+                                                },
+                                                contentDescription = "ডিভাইস মোড পরিবর্তন",
+                                                tint = when (activeUserMode) {
+                                                    AppUserMode.AUTO -> AccentEmerald
+                                                    AppUserMode.MOBILE -> AccentCyan
+                                                    else -> Color(0xFFC084FC)
+                                                },
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Text(
+                                                text = when (activeUserMode) {
+                                                    AppUserMode.AUTO -> "অটো মোড"
+                                                    AppUserMode.MOBILE -> "মোবাইল"
+                                                    else -> "টিভি মোড"
+                                                },
                                                 color = Color.White,
-                                                fontSize = 17.sp,
+                                                fontFamily = HindSiliguriFontFamily,
+                                                fontSize = 11.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(Color(0xFFEF4444))
+                                        }
+                                    }
+
+                                    // Notification Bell Button (Mobile)
+                                    val mobUnreadNotifCount = remember(notificationsList) { notificationsList.count { !it.isRead } }
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (mobUnreadNotifCount > 0) AccentCyan.copy(alpha = 0.2f) else ChannelCardSurface,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (mobUnreadNotifCount > 0) AccentCyan else Color(0xFF1E293B)
+                                        ),
+                                        modifier = Modifier
+                                            .clickable { showNotificationCenterDialog = true }
+                                            .testTag("notification_bell_button")
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = if (mobUnreadNotifCount > 0) Icons.Rounded.NotificationsActive else Icons.Rounded.Notifications,
+                                                contentDescription = "নোটিফিকেশন",
+                                                tint = if (mobUnreadNotifCount > 0) AccentCyan else Color.White,
+                                                modifier = Modifier.size(16.dp)
                                             )
+                                            if (mobUnreadNotifCount > 0) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(7.dp)
+                                                        .clip(CircleShape)
+                                                        .background(CrimsonGlow)
+                                                        .align(Alignment.TopEnd)
+                                                )
+                                            }
                                         }
-                                        Text(
-                                            text = currentTab.englishLabel,
-                                            color = Color(0xFF94A3B8),
-                                            fontSize = 11.sp
-                                        )
                                     }
-                                }
-                            }
 
-                            // Action Quick Controls
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Device Mode Selector Chip (Auto / Mobile / TV)
-                                Surface(
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = Color(0xFF0F172A),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        when (activeUserMode) {
-                                            AppUserMode.AUTO -> Color(0xFF10B981)
-                                            AppUserMode.MOBILE -> Color(0xFF00E5FF)
-                                            else -> Color(0xFFC084FC)
-                                        }
-                                    ),
-                                    modifier = Modifier.clickable { showDeviceModeDialog = true }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    // Status Indicator Dot + Refresh Button
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = ChannelCardSurface,
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E293B)),
+                                        modifier = Modifier
+                                            .clickable { refreshAllData() }
+                                            .testTag("refresh_channels_button")
                                     ) {
-                                        Icon(
-                                            imageVector = when (activeUserMode) {
-                                                AppUserMode.AUTO -> Icons.Rounded.Devices
-                                                AppUserMode.MOBILE -> Icons.Rounded.PhoneAndroid
-                                                else -> Icons.Rounded.Tv
-                                            },
-                                            contentDescription = "ডিভাইস মোড পরিবর্তন",
-                                            tint = when (activeUserMode) {
-                                                AppUserMode.AUTO -> Color(0xFF10B981)
-                                                AppUserMode.MOBILE -> Color(0xFF00E5FF)
-                                                else -> Color(0xFFC084FC)
-                                            },
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Text(
-                                            text = when (activeUserMode) {
-                                                AppUserMode.AUTO -> "অটো মোড"
-                                                AppUserMode.MOBILE -> "মোবাইল"
-                                                else -> "টিভি মোড"
-                                            },
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-
-                                // Notification Bell Button (Mobile)
-                                val mobUnreadNotifCount = remember(notificationsList) { notificationsList.count { !it.isRead } }
-                                Surface(
-                                    shape = CircleShape,
-                                    color = if (mobUnreadNotifCount > 0) Color(0xFF0284C7).copy(alpha = 0.25f) else Color(0xFF1E293B),
-                                    border = if (mobUnreadNotifCount > 0) androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF38BDF8)) else null,
-                                    modifier = Modifier.clickable { showNotificationCenterDialog = true }
-                                ) {
-                                    Box(
-                                        modifier = Modifier.padding(8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (mobUnreadNotifCount > 0) Icons.Rounded.NotificationsActive else Icons.Rounded.Notifications,
-                                            contentDescription = "নোটিফিকেশন",
-                                            tint = if (mobUnreadNotifCount > 0) Color(0xFF38BDF8) else Color.White,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        if (mobUnreadNotifCount > 0) {
+                                        Box(
+                                            modifier = Modifier.padding(8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isRefreshing) {
+                                                CircularProgressIndicator(
+                                                    color = AccentCyan,
+                                                    strokeWidth = 2.dp,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Refresh,
+                                                    contentDescription = "Refresh",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            // Live online status dot
                                             Box(
                                                 modifier = Modifier
-                                                    .size(7.dp)
+                                                    .size(6.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(0xFFEF4444))
+                                                    .background(if (isRefreshing) AccentAmber else AccentEmerald)
                                                     .align(Alignment.TopEnd)
                                             )
                                         }
                                     }
                                 }
+                            }
+                        }
 
-                                // Refresh Button
-                                Surface(
-                                    shape = CircleShape,
-                                    color = Color(0xFF1E293B),
-                                    modifier = Modifier.clickable { refreshAllData() }
+                        // Loading / Sync Progress Bar ("• ২. লাইভ ইভেন্ট লোড হচ্ছে..." left, "ধাপ X/4" in amber/gold right)
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isRefreshing && currentLoadingStage != LoadingStage.IDLE,
+                            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+                        ) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = ChannelCardSurface,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E293B))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Box(modifier = Modifier.padding(8.dp)) {
-                                        if (isRefreshing) {
-                                            CircularProgressIndicator(
-                                                color = Color(0xFF00E5FF),
-                                                strokeWidth = 2.dp,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Refresh,
-                                                contentDescription = "Refresh",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(AccentCyan)
+                                    )
+                                    Text(
+                                        text = "• ${currentLoadingStage.title}",
+                                        color = Color(0xFFE2E8F0),
+                                        fontFamily = HindSiliguriFontFamily,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = "ধাপ ${currentLoadingStage.step}/4",
+                                        color = AccentAmber,
+                                        fontFamily = HindSiliguriFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
                                 }
                             }
                         }
-                    }
 
-                    // Phased Sequential Loading Indicator Banner (Mobile Mode)
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = isRefreshing && currentLoadingStage != LoadingStage.IDLE,
-                        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-                        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
-                    ) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 2.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF0F172A),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(13.dp),
-                                    color = Color(0xFF00E5FF),
-                                    strokeWidth = 2.dp
-                                )
-                                Text(
-                                    text = currentLoadingStage.title,
-                                    color = Color(0xFF38BDF8),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "ধাপ ${currentLoadingStage.step}/4",
-                                    color = Color(0xFF10B981),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    // App-wide Breaking News Ticker Bar at the very top of mobile app
+                        // Breaking News Ticker Bar (dark rounded bar + solid crimson pill "• ব্রেকিং নিউজ")
                         BreakingNewsTickerBar(
                             tickerText = breakingNewsText,
                             isTvMode = false,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 2.dp)
+                                .padding(horizontal = 12.dp, vertical = 3.dp)
                         )
                     }
                 },
@@ -1800,50 +1793,19 @@ fun NafiTvMainApp(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0F172A))
+                            .background(SlateNavyBackground)
                     ) {
                         // Mobile Non-Intrusive Banner Ad (Collapses automatically if failed or dismissed)
                         NonIntrusiveAdMobBanner(isTvMode = false)
 
-                        NavigationBar(
-                            containerColor = Color(0xFF0F172A),
-                            contentColor = Color.White
-                        ) {
-                            AppTab.values().forEach { tab ->
-                                val selected = currentTab == tab
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = { currentTab = tab },
-                                    icon = {
-                                        Icon(
-                                            imageVector = when (tab) {
-                                                AppTab.EVENTS -> Icons.Rounded.EmojiEvents
-                                                AppTab.LIVE_TV -> Icons.Rounded.Tv
-                                                AppTab.MOVIES -> Icons.Rounded.Movie
-                                                AppTab.PLAYLIST -> Icons.Rounded.Folder
-                                                AppTab.MENU -> Icons.Rounded.Menu
-                                            },
-                                            contentDescription = tab.englishLabel,
-                                            tint = if (selected) Color(0xFF00E5FF) else Color(0xFF94A3B8)
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = tab.englishLabel,
-                                            color = if (selected) Color(0xFF00E5FF) else Color(0xFF94A3B8),
-                                            fontSize = 11.sp,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color(0xFF1E293B)
-                                    )
-                                )
-                            }
-                        }
+                        // Floating Matte-Black Pill Bottom Navigation Bar with Glowing Crimson Liquid-Wave Bulge
+                        FloatingLiquidWaveNavBar(
+                            currentTab = currentTab,
+                            onSelectTab = { currentTab = it }
+                        )
                     }
                 },
-                containerColor = Color(0xFF020617)
+                containerColor = SlateNavyBackground
             ) { paddingValues ->
                 Box(
                     modifier = Modifier

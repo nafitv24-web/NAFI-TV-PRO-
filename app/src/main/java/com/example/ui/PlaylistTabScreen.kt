@@ -179,7 +179,7 @@ fun PlaylistTabScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF020617))
+            .background(Color(0xFF0B111A))
     ) {
         if (selectedPlaylist == null) {
             // ==================== PLAYLISTS HOME VIEW ====================

@@ -718,7 +718,7 @@ fun MoviesTabScreen(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF020617))
+            .background(Color(0xFF0B111A))
     ) {
         val isCompactTvLayout = isTvMode || maxHeight < 560.dp || (maxWidth > maxHeight && maxHeight < 640.dp)
 

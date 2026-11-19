@@ -66,9 +66,9 @@ fun BreakingNewsTickerBar(
         modifier = modifier
             .fillMaxWidth()
             .clickable { showDetailDialog = true },
-        shape = RoundedCornerShape(if (isTvMode) 10.dp else 8.dp),
-        color = Color(0xFF0F172A),
-        border = if (showBorder) BorderStroke(1.dp, Color(0xFFDC2626).copy(alpha = 0.55f)) else null,
+        shape = RoundedCornerShape(if (isTvMode) 12.dp else 10.dp),
+        color = Color(0xFF131C29),
+        border = if (showBorder) BorderStroke(1.dp, Color(0xFFD90429).copy(alpha = 0.50f)) else null,
         shadowElevation = 2.dp
     ) {
         Row(
@@ -77,29 +77,29 @@ fun BreakingNewsTickerBar(
                 .background(
                     Brush.horizontalGradient(
                         colors = listOf(
-                            Color(0xFF991B1B).copy(alpha = 0.9f),
-                            Color(0xFF7F1D1D).copy(alpha = 0.5f),
-                            Color(0xFF0F172A)
+                            Color(0xFF3A0612).copy(alpha = 0.85f),
+                            Color(0xFF131C29),
+                            Color(0xFF0B111A)
                         )
                     )
                 )
                 .padding(horizontal = 8.dp, vertical = if (isTvMode) 6.dp else 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Live Red Badge (Clean, battery-friendly static indicator)
+            // Solid Crimson-Red Pill Badge ("• ব্রেকিং নিউজ")
             Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = Color(0xFFDC2626),
-                border = BorderStroke(0.5.dp, Color(0xFFFCA5A5))
+                shape = RoundedCornerShape(50),
+                color = Color(0xFFD90429),
+                border = BorderStroke(0.5.dp, Color(0xFFFF6B81).copy(alpha = 0.65f))
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.5.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(7.dp)
+                            .size(6.dp)
                             .clip(CircleShape)
                             .background(Color.White)
                     )
@@ -108,7 +108,7 @@ fun BreakingNewsTickerBar(
                         color = Color.White,
                         fontSize = if (isTvMode) 11.sp else 10.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 0.3.sp
+                        letterSpacing = 0.25.sp
                     )
                 }
             }
