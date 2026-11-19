@@ -2460,7 +2460,6 @@ fun AdminControlAppScreen(
                                         if (liveTvM3uInput.isNotBlank()) {
                                             val url = liveTvM3uInput.trim()
                                             repository.saveLiveTvM3uUrl(url)
-                                            onDataChanged()
                                             coroutineScope.launch {
                                                 val ok = repository.pushAppConfigToFirebase(liveTvM3u = url)
                                                 withContext(Dispatchers.Main) {
@@ -3944,7 +3943,6 @@ fun AdminControlAppScreen(
                                                 }
                                             }
                                         }
-                                        onDataChanged()
                                     },
                                     modifier = Modifier.weight(1.3f).height(46.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF), contentColor = Color.Black),

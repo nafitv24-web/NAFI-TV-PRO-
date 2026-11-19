@@ -56,9 +56,27 @@ class MediaRepository(private val context: Context) {
 
     private val fastM3uClient: OkHttpClient by lazy {
         client.newBuilder()
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(35, TimeUnit.SECONDS)
-            .callTimeout(45, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(0, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
+
+    private val resilientLiveTvClient: OkHttpClient by lazy {
+        val dedicatedDispatcher = okhttp3.Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 16
+        }
+        client.newBuilder()
+            .dispatcher(dedicatedDispatcher)
+            .connectTimeout(35, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(0, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
@@ -850,7 +868,25 @@ class MediaRepository(private val context: Context) {
     }
 
     fun saveCachedLiveTvChannels(list: List<MediaItem>) {
-        saveListToFileCache("cache_livetv_v4.json", list.filterNot { isDemoChannel(it) }, maxDiskItems = 5000)
+        saveListToFileCache("cache_livetv_v4.json", list.filterNot { isDemoChannel(it) }, maxDiskItems = 25000)
+    }
+
+    private fun liveTvSourceCacheFileName(url: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(url.trim().toByteArray(Charsets.UTF_8))
+            .take(12)
+            .joinToString("") { "%02x".format(it) }
+        return "cache_livetv_src_$digest.json"
+    }
+
+    fun saveCachedLiveTvSourceUrl(url: String, items: List<MediaItem>) {
+        if (url.isBlank() || items.isEmpty()) return
+        saveListToFileCache(liveTvSourceCacheFileName(url), items.filterNot { isDemoChannel(it) }, maxDiskItems = 25000)
+    }
+
+    fun getCachedLiveTvSourceUrl(url: String): List<MediaItem> {
+        if (url.isBlank()) return emptyList()
+        return loadListFromFileCache(liveTvSourceCacheFileName(url)).filterNot { isDemoChannel(it) }
     }
 
     fun saveCachedMoviesList(list: List<MediaItem>) {
@@ -1228,10 +1264,43 @@ class MediaRepository(private val context: Context) {
     }
 
     /**
-     * Fetches a single Admin Panel Live TV playlist URL (M3U, JSON, or Xtream URL)
-     * as fast as possible using pooled HTTP connections, without pulling from the Playlist tab.
+     * Assembles Live TV channels strictly preserving top-to-bottom Admin Panel playlist serial order:
+     * 1. Admin Live TV playlist URLs in exact index order (top playlist first, then 2nd, 3rd, ...)
+     * 2. Custom & Firebase single channels
+     * 3. Xtream Live channels
+     * 4. Fallback / built-in channels (only if provided)
      */
-    suspend fun fetchSingleLiveTvSourceUrlFast(rawUrl: String): List<MediaItem> = withContext(Dispatchers.IO) {
+    fun assembleOrderedLiveTvChannels(
+        orderedAdminUrls: List<String>,
+        batchesByUrl: Map<String, List<MediaItem>>,
+        customChannels: List<MediaItem> = emptyList(),
+        firebaseChannels: List<MediaItem> = emptyList(),
+        xtreamChannels: List<MediaItem> = emptyList(),
+        fallbackChannels: List<MediaItem> = emptyList()
+    ): List<MediaItem> {
+        val combined = ArrayList<MediaItem>()
+        for (url in orderedAdminUrls) {
+            val batch = batchesByUrl[url]
+            if (!batch.isNullOrEmpty()) {
+                combined.addAll(batch)
+            }
+        }
+        if (customChannels.isNotEmpty()) combined.addAll(customChannels)
+        if (firebaseChannels.isNotEmpty()) combined.addAll(firebaseChannels)
+        if (xtreamChannels.isNotEmpty()) combined.addAll(xtreamChannels)
+        if (fallbackChannels.isNotEmpty()) combined.addAll(fallbackChannels)
+        return mergeLiveTvChannelsFast(combined)
+    }
+
+    /**
+     * Fetches a single Admin Panel Live TV playlist URL (M3U, JSON, or Xtream URL)
+     * with slow-network resilience (retries, generous read timeout, unlimited call duration)
+     * and optional per-URL disk cache fallback so zero channels are lost on slow/flaky connections.
+     */
+    suspend fun fetchSingleLiveTvSourceUrlFast(
+        rawUrl: String,
+        allowCacheFallback: Boolean = true
+    ): List<MediaItem> = withContext(Dispatchers.IO) {
         val cleanUrl = rawUrl.trim()
         if (cleanUrl.isBlank()) return@withContext emptyList()
         val deleted = getDeletedIds()
@@ -1244,7 +1313,11 @@ class MediaRepository(private val context: Context) {
                 emptyList()
             }
             if (xtreamItems.isNotEmpty()) {
-                return@withContext xtreamItems.filterNot { deleted.contains(it.id) || isItemDeleted(it) || isDemoChannel(it) }
+                val filtered = xtreamItems.filterNot { deleted.contains(it.id) || isItemDeleted(it) || isDemoChannel(it) }
+                if (filtered.isNotEmpty()) {
+                    saveCachedLiveTvSourceUrl(cleanUrl, filtered)
+                    return@withContext filtered
+                }
             }
         }
 
@@ -1253,20 +1326,23 @@ class MediaRepository(private val context: Context) {
         } catch (_: Exception) {
             emptyList()
         }
-        if (fetched.isEmpty()) return@withContext emptyList()
+        if (fetched.isEmpty()) {
+            if (allowCacheFallback) {
+                val cached = getCachedLiveTvSourceUrl(cleanUrl)
+                    .filterNot { deleted.contains(it.id) || isItemDeleted(it) || isDemoChannel(it) }
+                if (cached.isNotEmpty()) return@withContext cached
+            }
+            return@withContext emptyList()
+        }
 
         val result = ArrayList<MediaItem>(fetched.size)
         for (item in fetched) {
             if (deleted.contains(item.id) || isItemDeleted(item) || isDemoChannel(item)) continue
-            val cleanPath = item.streamUrl.trim().lowercase().substringBefore('?')
-            val isExplicitVodFile = cleanPath.endsWith(".mp4") ||
-                cleanPath.endsWith(".mkv") ||
-                cleanPath.endsWith(".avi") ||
-                cleanPath.endsWith(".mov") ||
-                cleanPath.endsWith(".webm") ||
-                cleanPath.endsWith(".m4v")
-            if (isExplicitVodFile) continue
+            if (item.streamUrl.isBlank() && item.servers.isEmpty()) continue
             result.add(item.copy(type = MediaType.LIVE_TV, isLive = true))
+        }
+        if (result.isNotEmpty()) {
+            saveCachedLiveTvSourceUrl(cleanUrl, result)
         }
         result
     }
@@ -1276,8 +1352,9 @@ class MediaRepository(private val context: Context) {
             .filterNot { isItemDeleted(it) || isDemoChannel(it) }
         val cached = getCachedLiveTvChannels().filterNot { isItemDeleted(it) || isDemoChannel(it) }
         val combined = mutableListOf<MediaItem>()
-        combined.addAll(customTv)
+        // Cached list already reflects Admin Panel top-to-bottom playlist serial order
         combined.addAll(cached)
+        combined.addAll(customTv)
         if (combined.isEmpty()) {
             combined.addAll(getDefaultBuiltinLiveTv())
         }
@@ -1496,13 +1573,14 @@ class MediaRepository(private val context: Context) {
     fun extractUrls(input: String): List<String> {
         if (input.isBlank()) return emptyList()
         val result = linkedSetOf<String>()
-        val rawSegments = input.split(Regex("[\r\n,;]+"))
-        for (segment in rawSegments) {
-            val trimmed = segment.trim()
-            if (trimmed.isEmpty()) continue
-            val subUrls = trimmed.split(Regex("\\s+(?=https?://)", RegexOption.IGNORE_CASE))
-            for (candidate in subUrls) {
-                val urlToken = candidate.trim()
+        val rawLines = input.split(Regex("[\r\n]+"))
+        for (line in rawLines) {
+            val trimmedLine = line.trim()
+            if (trimmedLine.isEmpty()) continue
+            // Split multiple URLs on the same line separated by comma/semicolon/whitespace before another http(s)://
+            val candidates = trimmedLine.split(Regex("(?:[,;]+\\s*|\\s+)(?=https?://)", RegexOption.IGNORE_CASE))
+            for (candidate in candidates) {
+                val urlToken = candidate.trim().trimEnd(',', ';')
                 if (urlToken.startsWith("http://", ignoreCase = true) || urlToken.startsWith("https://", ignoreCase = true)) {
                     result.add(urlToken.replace(" ", "%20"))
                 } else {
@@ -1838,35 +1916,61 @@ class MediaRepository(private val context: Context) {
                 return@withContext emptyList()
             }
 
-            val reqBuilder = Request.Builder()
-                .url(raw)
-                .header("User-Agent", headersMap["User-Agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            val fallbackUserAgents = listOf(
+                headersMap["User-Agent"] ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "VLC/3.0.20 LibVLC/3.0.20",
+                "IPTVSmartersPro"
+            )
 
-            for ((k, v) in headersMap) {
-                if (!k.equals("User-Agent", ignoreCase = true)) {
-                    reqBuilder.header(k, v)
+            var content: String? = null
+            val maxAttempts = 3
+            for (attempt in 0 until maxAttempts) {
+                try {
+                    val reqBuilder = Request.Builder()
+                        .url(raw)
+                        .header("User-Agent", fallbackUserAgents[attempt.coerceAtMost(fallbackUserAgents.lastIndex)])
+                        .header("Accept", "*/*")
+
+                    for ((k, v) in headersMap) {
+                        if (!k.equals("User-Agent", ignoreCase = true)) {
+                            reqBuilder.header(k, v)
+                        }
+                    }
+
+                    resilientLiveTvClient.newCall(reqBuilder.build()).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bodyStr = response.body?.string()?.trim()
+                            if (!bodyStr.isNullOrBlank()) {
+                                content = bodyStr
+                            }
+                        } else if (response.code !in listOf(403, 406, 408, 429, 500, 502, 503, 504)) {
+                            return@withContext emptyList()
+                        }
+                    }
+                    if (!content.isNullOrBlank()) break
+                } catch (e: Exception) {
+                    if (attempt == maxAttempts - 1) {
+                        e.printStackTrace()
+                    }
+                }
+                if (attempt < maxAttempts - 1) {
+                    kotlinx.coroutines.delay(if (attempt == 0) 900L else 2200L)
                 }
             }
 
-            val response = fastM3uClient.newCall(reqBuilder.build()).execute()
-            if (!response.isSuccessful) {
-                response.close()
-                return@withContext emptyList()
+            var finalContent = content ?: return@withContext emptyList()
+            if (finalContent.startsWith("\uFEFF")) {
+                finalContent = finalContent.removePrefix("\uFEFF").trim()
             }
-
-            var content = response.use { it.body?.string()?.trim() } ?: return@withContext emptyList()
-            if (content.startsWith("\uFEFF")) {
-                content = content.removePrefix("\uFEFF").trim()
-            }
-            if (content.startsWith("[") || content.startsWith("{")) {
+            if (finalContent.startsWith("[") || finalContent.startsWith("{")) {
                 val isExplicitLiveTv = raw.contains("channel", ignoreCase = true) || raw.contains("livetv", ignoreCase = true) || raw.contains("Update", ignoreCase = true) || raw.contains("bdtv", ignoreCase = true) || raw.contains("tv", ignoreCase = true)
-                val isSports = !isExplicitLiveTv && (raw.contains("sport", ignoreCase = true) || raw.contains("event", ignoreCase = true) || raw.contains("match", ignoreCase = true) || raw.contains("live", ignoreCase = true) || content.contains("\"sport\"", ignoreCase = true))
-                val isMovieOrSeries = !isExplicitLiveTv && !isSports && (raw.contains("movie", ignoreCase = true) || raw.contains("series", ignoreCase = true) || content.contains("\"movies\"", ignoreCase = true) || content.contains("\"series\"", ignoreCase = true))
+                val isSports = !isExplicitLiveTv && (raw.contains("sport", ignoreCase = true) || raw.contains("event", ignoreCase = true) || raw.contains("match", ignoreCase = true) || raw.contains("live", ignoreCase = true) || finalContent.contains("\"sport\"", ignoreCase = true))
+                val isMovieOrSeries = !isExplicitLiveTv && !isSports && (raw.contains("movie", ignoreCase = true) || raw.contains("series", ignoreCase = true) || finalContent.contains("\"movies\"", ignoreCase = true) || finalContent.contains("\"series\"", ignoreCase = true))
                 val defCat = if (isExplicitLiveTv) "Live TV" else if (isSports) "Sports" else if (isMovieOrSeries) "Movies" else "Live TV"
                 val defType = if (isExplicitLiveTv) MediaType.LIVE_TV else if (isSports) MediaType.LIVE_EVENT else if (isMovieOrSeries) MediaType.MOVIE else MediaType.LIVE_TV
-                return@withContext parseMediaFromJsonString(content, defaultCategory = defCat, defaultType = defType)
+                return@withContext parseMediaFromJsonString(finalContent, defaultCategory = defCat, defaultType = defType)
             }
-            val parsed = parseM3uLines(content.lines())
+            val parsed = parseM3uLines(finalContent.lines())
             if (parsed.isEmpty() && raw.contains("SM-Movie-Hup-Auto-Update", ignoreCase = true) && !raw.contains("Movie_Combined.m3u")) {
                 return@withContext fetchSingleM3uUrl("https://raw.githubusercontent.com/sm-monirulislam/SM-Movie-Hup-Auto-Update/main/Movie_Combined.m3u")
             }
@@ -1926,7 +2030,7 @@ class MediaRepository(private val context: Context) {
         var currentId = 1
 
         for (line in lines) {
-            val trimmed = line.trim()
+            val trimmed = line.removePrefix("\uFEFF").trim()
             if (trimmed.isEmpty()) continue
 
             if (trimmed.startsWith("#EXTINF:", ignoreCase = true)) {
@@ -1934,12 +2038,14 @@ class MediaRepository(private val context: Context) {
                 currentLogo = extractM3uAttribute(trimmed, "tvg-logo")
                 currentCountry = extractM3uAttribute(trimmed, "tvg-country")
                 currentTvgId = extractM3uAttribute(trimmed, "tvg-id")
+                val tvgNameFallback = extractM3uAttribute(trimmed, "tvg-name")?.trim().orEmpty()
 
                 val commaIndex = trimmed.lastIndexOf(',')
-                currentTitle = if (commaIndex != -1) {
-                    trimmed.substring(commaIndex + 1).trim()
-                } else {
-                    "Channel $currentId"
+                val afterComma = if (commaIndex != -1) trimmed.substring(commaIndex + 1).trim() else ""
+                currentTitle = when {
+                    afterComma.isNotBlank() -> afterComma
+                    tvgNameFallback.isNotBlank() -> tvgNameFallback
+                    else -> "Channel $currentId"
                 }
 
                 // If country tag is in the title e.g. "Arirang World KR" or "[BD]"
@@ -2025,6 +2131,7 @@ class MediaRepository(private val context: Context) {
             } else if (
                 trimmed.startsWith("http://", ignoreCase = true) ||
                 trimmed.startsWith("https://", ignoreCase = true) ||
+                trimmed.startsWith("//") ||
                 trimmed.startsWith("rtsp://", ignoreCase = true) ||
                 trimmed.startsWith("rtmp://", ignoreCase = true) ||
                 trimmed.startsWith("udp://", ignoreCase = true) ||
@@ -2033,8 +2140,7 @@ class MediaRepository(private val context: Context) {
                 trimmed.startsWith("mmsh://", ignoreCase = true) ||
                 trimmed.startsWith("srt://", ignoreCase = true)
             ) {
-                if (items.size >= 12000) break
-                var streamUrl = trimmed
+                var streamUrl = if (trimmed.startsWith("//")) "https:$trimmed" else trimmed
                 val streamInfo = com.example.util.DrmHelper.extractStreamInfo(
                     rawUrl = streamUrl,
                     itemScheme = currentDrmScheme,
@@ -5103,33 +5209,44 @@ class MediaRepository(private val context: Context) {
             val (liveCatMap, liveJsonStr) = coroutineScope {
                 val catJob = async {
                     val map = mutableMapOf<String, String>()
-                    try {
-                        val catUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_categories"
-                        val catReq = Request.Builder().url(catUrl).header("User-Agent", "IPTVSmartersPro").build()
-                        fastM3uClient.newCall(catReq).execute().use { catResp ->
-                            if (catResp.isSuccessful) {
-                                val arr = JSONArray(catResp.body?.string() ?: "")
-                                for (i in 0 until arr.length()) {
-                                    val obj = arr.optJSONObject(i) ?: continue
-                                    val id = obj.optString("category_id")
-                                    val name = obj.optString("category_name")
-                                    if (id.isNotBlank() && name.isNotBlank()) map[id] = name
+                    for (attempt in 0 until 2) {
+                        try {
+                            val catUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_categories"
+                            val catReq = Request.Builder().url(catUrl).header("User-Agent", "IPTVSmartersPro").build()
+                            resilientLiveTvClient.newCall(catReq).execute().use { catResp ->
+                                if (catResp.isSuccessful) {
+                                    val arr = JSONArray(catResp.body?.string() ?: "")
+                                    for (i in 0 until arr.length()) {
+                                        val obj = arr.optJSONObject(i) ?: continue
+                                        val id = obj.optString("category_id")
+                                        val name = obj.optString("category_name")
+                                        if (id.isNotBlank() && name.isNotBlank()) map[id] = name
+                                    }
                                 }
                             }
-                        }
-                    } catch (_: Exception) {}
+                            if (map.isNotEmpty()) break
+                        } catch (_: Exception) {}
+                        if (attempt == 0) kotlinx.coroutines.delay(900L)
+                    }
                     map
                 }
                 val liveJob = async {
-                    try {
-                        val liveUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams"
-                        val liveReq = Request.Builder().url(liveUrl).header("User-Agent", "IPTVSmartersPro").build()
-                        fastM3uClient.newCall(liveReq).execute().use { liveResp ->
-                            if (liveResp.isSuccessful) liveResp.body?.string() else null
-                        }
-                    } catch (_: Exception) {
-                        null
+                    var body: String? = null
+                    for (attempt in 0 until 3) {
+                        try {
+                            val liveUrl = "$cleanServer/player_api.php?username=$cleanUser&password=$cleanPass&action=get_live_streams"
+                            val liveReq = Request.Builder().url(liveUrl).header("User-Agent", "IPTVSmartersPro").build()
+                            resilientLiveTvClient.newCall(liveReq).execute().use { liveResp ->
+                                if (liveResp.isSuccessful) {
+                                    val str = liveResp.body?.string()
+                                    if (!str.isNullOrBlank()) body = str
+                                }
+                            }
+                            if (!body.isNullOrBlank()) break
+                        } catch (_: Exception) {}
+                        if (attempt < 2) kotlinx.coroutines.delay(if (attempt == 0) 1000L else 2200L)
                     }
+                    body
                 }
                 catJob.await() to liveJob.await()
             }
@@ -5183,25 +5300,32 @@ class MediaRepository(private val context: Context) {
 
     suspend fun fetchAllXtreamLiveChannels(): List<MediaItem> = withContext(Dispatchers.IO) {
         val accounts = getActiveXtreamAccounts().filter { it.includeLive }
-        if (accounts.isEmpty()) {
-            return@withContext fetchXtreamLiveStreamsOnly("http://rgkkw.live:80", "4dfoydR2gZ", "clever3still")
-        }
         val allItems = mutableListOf<MediaItem>()
-        coroutineScope {
-            val jobs = accounts.map { acc ->
-                async {
-                    try {
-                        fetchXtreamLiveStreamsOnly(acc.serverUrl, acc.username, acc.password)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        emptyList()
+        if (accounts.isEmpty()) {
+            allItems.addAll(fetchXtreamLiveStreamsOnly("http://rgkkw.live:80", "4dfoydR2gZ", "clever3still"))
+        } else {
+            coroutineScope {
+                val jobs = accounts.map { acc ->
+                    async {
+                        try {
+                            fetchXtreamLiveStreamsOnly(acc.serverUrl, acc.username, acc.password)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            emptyList()
+                        }
                     }
                 }
+                val results = jobs.awaitAll()
+                results.forEach { allItems.addAll(it) }
             }
-            val results = jobs.awaitAll()
-            results.forEach { allItems.addAll(it) }
         }
-        mergeLiveTvChannelsFast(allItems)
+        val merged = mergeLiveTvChannelsFast(allItems)
+        if (merged.isNotEmpty()) {
+            saveListToFileCache("cache_xtream_live_v1.json", merged, maxDiskItems = 25000)
+            merged
+        } else {
+            loadListFromFileCache("cache_xtream_live_v1.json").filterNot { isDemoChannel(it) }
+        }
     }
 
     suspend fun fetchStarshareMoviesAndSeries(): List<MediaItem> = withContext(Dispatchers.IO) {
@@ -5897,17 +6021,15 @@ class MediaRepository(private val context: Context) {
     }
 
     fun getSavedLiveTvM3uUrl(): String {
-        val current = prefs.getString("saved_live_tv_m3u_url", DEFAULT_LIVE_TV_M3U_URL) ?: DEFAULT_LIVE_TV_M3U_URL
-        val updateChannelUrl = "https://raw.githubusercontent.com/nafitv24-web/NAFI-TV/refs/heads/main/Update%20Channel.m3u"
-
-        val urls = linkedSetOf<String>()
-        urls.add(updateChannelUrl)
-        if (current.isNotBlank()) {
-            extractUrls(current)
-                .filterNot { it.contains("Sports%20Channel%20NF.m3u") || it.contains("Nafitv24.m3u", ignoreCase = true) }
-                .forEach { urls.add(it) }
+        val stored = prefs.getString("saved_live_tv_m3u_url", null)?.trim()
+        if (!stored.isNullOrBlank()) {
+            val extracted = extractUrls(stored)
+            if (extracted.isNotEmpty()) {
+                // Preserve exact top-to-bottom Admin Panel serial order
+                return extracted.joinToString("\n")
+            }
         }
-        return urls.joinToString("\n")
+        return DEFAULT_LIVE_TV_M3U_URL
     }
 
     fun saveSportsM3uUrl(url: String) {
